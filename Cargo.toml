@@ -1,0 +1,20 @@
+[package]
+name = "gitr"
+version = "0.1.0"
+edition = "2024"
+description = "A fast, native Git client"
+license = "MIT"
+
+[dependencies]
+chrono = { version = "0.4.45", default-features = false, features = ["clock"] }
+eframe = { version = "0.36", features = ["persistence"] }
+egui = "0.36"
+egui-phosphor = "0.14"
+# MIT OR Apache-2.0; decodes images for the preview panes.
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp", "ico", "tiff"] }
+rfd = "0.17"
+serde = { version = "1.0.229", features = ["derive"] }
+
+[features]
+# Dev aid: GITR_SCREENSHOT=out.png saves a screenshot after startup and exits.
+screenshot = []
