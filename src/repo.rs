@@ -2,12 +2,12 @@
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::{channel, Receiver, Sender};
+use std::sync::mpsc::{Receiver, Sender, channel};
 use std::time::{Duration, Instant};
 
 use crate::git::diff::{self, FileDiff, Selection};
 use crate::git::graph::{self, GraphRow};
-use crate::git::{self, cmd, Commit, CommitDetails, FileChange, Refs, Status};
+use crate::git::{self, Commit, CommitDetails, FileChange, Refs, Status, cmd};
 
 pub type Task = Box<dyn FnOnce(&Path) -> Result<String, String> + Send>;
 
@@ -53,7 +53,11 @@ enum Msg {
     History(String, String, Result<Vec<git::HistoryEntry>, String>),
     HistoryDiff(String, String, Result<FileDiff, String>),
     OpStarted(String),
-    OpDone { label: String, kind: OpKind, result: Result<String, String> },
+    OpDone {
+        label: String,
+        kind: OpKind,
+        result: Result<String, String>,
+    },
 }
 
 struct Job {
@@ -199,7 +203,11 @@ impl RepoTab {
                     let _ = tx.send(Msg::OpStarted(job.label.clone()));
                     ctx.request_repaint();
                     let result = (job.task)(&path);
-                    let _ = tx.send(Msg::OpDone { label: job.label, kind: job.kind, result });
+                    let _ = tx.send(Msg::OpDone {
+                        label: job.label,
+                        kind: job.kind,
+                        result,
+                    });
                     ctx.request_repaint();
                 }
             });
@@ -334,7 +342,11 @@ impl RepoTab {
             match msg {
                 Msg::Log(generation, result) if generation == self.log_gen => match result {
                     Ok((commits, rows)) => {
-                        self.index_of = commits.iter().enumerate().map(|(i, c)| (c.id.clone(), i)).collect();
+                        self.index_of = commits
+                            .iter()
+                            .enumerate()
+                            .map(|(i, c)| (c.id.clone(), i))
+                            .collect();
                         self.commits = commits;
                         self.graph = rows;
                         let first_load = !self.log_loaded;
@@ -383,7 +395,9 @@ impl RepoTab {
                 }
                 Msg::Diff(key, generation, result) => match &key {
                     DiffKey::Work { .. } => {
-                        if generation == self.diff_gen && self.change_diff.as_ref().is_some_and(|(k, _)| *k == key) {
+                        if generation == self.diff_gen
+                            && self.change_diff.as_ref().is_some_and(|(k, _)| *k == key)
+                        {
                             self.change_diff = Some((key, result.into()));
                         }
                     }
@@ -415,7 +429,11 @@ impl RepoTab {
                     }
                 }
                 Msg::History(path, rev, result) => {
-                    if let Some(h) = self.file_history.as_mut().filter(|h| h.path == path && h.rev == rev) {
+                    if let Some(h) = self
+                        .file_history
+                        .as_mut()
+                        .filter(|h| h.path == path && h.rev == rev)
+                    {
                         let first = result.as_ref().ok().filter(|e| !e.is_empty()).map(|_| 0);
                         h.entries = result.into();
                         if h.selected.is_none() {
@@ -433,7 +451,11 @@ impl RepoTab {
                     }
                 }
                 Msg::OpStarted(label) => self.running.push(label),
-                Msg::OpDone { label, kind, result } => {
+                Msg::OpDone {
+                    label,
+                    kind,
+                    result,
+                } => {
                     if let Some(i) = self.running.iter().position(|l| *l == label) {
                         self.running.remove(i);
                     }
@@ -448,13 +470,21 @@ impl RepoTab {
                         time: chrono::Local::now(),
                     });
                     if !ok {
-                        self.notices.push(Notice { title: format!("{label} failed"), text: output, error: true });
+                        self.notices.push(Notice {
+                            title: format!("{label} failed"),
+                            text: output,
+                            error: true,
+                        });
                     } else if kind == OpKind::Commit {
                         self.commit_subject.clear();
                         self.commit_body.clear();
                         self.amend = false;
                     } else if kind == OpKind::Notify {
-                        self.notices.push(Notice { title: label.clone(), text: output, error: false });
+                        self.notices.push(Notice {
+                            title: label.clone(),
+                            text: output,
+                            error: false,
+                        });
                     }
                     self.line_selection.clear();
                     self.refresh();
@@ -469,8 +499,16 @@ impl RepoTab {
         // Keep the selected file if it is still present, preferring the same list.
         if let Some((staged, path)) = self.selected_change.clone() {
             let in_list = |list: &Vec<FileChange>, p: &str| list.iter().any(|f| f.path == p);
-            let same = if staged { &self.status.staged } else { &self.status.unstaged };
-            let other = if staged { &self.status.unstaged } else { &self.status.staged };
+            let same = if staged {
+                &self.status.staged
+            } else {
+                &self.status.unstaged
+            };
+            let other = if staged {
+                &self.status.unstaged
+            } else {
+                &self.status.staged
+            };
             if in_list(same, &path) {
                 let same = same.clone();
                 self.selected_changes.retain(|p| in_list(&same, p));
@@ -478,7 +516,12 @@ impl RepoTab {
             } else if in_list(other, &path) {
                 // The selection moved to the other list (staged/unstaged): follow it.
                 let other = other.clone();
-                let keep: BTreeSet<String> = self.selected_changes.iter().filter(|p| in_list(&other, p)).cloned().collect();
+                let keep: BTreeSet<String> = self
+                    .selected_changes
+                    .iter()
+                    .filter(|p| in_list(&other, p))
+                    .cloned()
+                    .collect();
                 self.select_change(!staged, path);
                 self.selected_changes.extend(keep);
             } else {
@@ -488,7 +531,11 @@ impl RepoTab {
             }
         }
         // Close the merge editor once its file is no longer conflicted.
-        if self.merge_editor.as_ref().is_some_and(|e| !self.status.conflicts.contains_key(&e.path)) {
+        if self
+            .merge_editor
+            .as_ref()
+            .is_some_and(|e| !self.status.conflicts.contains_key(&e.path))
+        {
             self.merge_editor = None;
         }
     }
@@ -528,7 +575,9 @@ impl RepoTab {
     }
 
     pub fn load_commit_diff(&mut self, file: &FileChange) {
-        let Some(Loaded::Ready(details)) = &self.details else { return };
+        let Some(Loaded::Ready(details)) = &self.details else {
+            return;
+        };
         if self.commit_diffs.contains_key(&file.path) {
             return;
         }
@@ -540,12 +589,21 @@ impl RepoTab {
         self.commit_diffs.insert(file.path.clone(), Loaded::Loading);
         self.spawn(move |p| {
             let result = diff::commit_file_diff(p, &id, parent.as_deref(), &file, context, ws);
-            Msg::Diff(DiffKey::Commit { id, path: file.path }, 0, result)
+            Msg::Diff(
+                DiffKey::Commit {
+                    id,
+                    path: file.path,
+                },
+                0,
+                result,
+            )
         });
     }
 
     pub fn reload_commit_diffs(&mut self) {
-        let Some(Loaded::Ready(details)) = &self.details else { return };
+        let Some(Loaded::Ready(details)) = &self.details else {
+            return;
+        };
         let files: Vec<FileChange> = details
             .files
             .iter()
@@ -559,7 +617,9 @@ impl RepoTab {
     }
 
     pub fn load_tree(&mut self) {
-        let Some(id) = self.selected.clone() else { return };
+        let Some(id) = self.selected.clone() else {
+            return;
+        };
         if self.tree.as_ref().is_some_and(|(t, _)| *t == id) {
             return;
         }
@@ -568,7 +628,9 @@ impl RepoTab {
     }
 
     pub fn load_tree_file(&mut self, path: String) {
-        let Some(id) = self.selected.clone() else { return };
+        let Some(id) = self.selected.clone() else {
+            return;
+        };
         self.tree_file = Some((path.clone(), Loaded::Loading));
         self.spawn(move |p| Msg::Blob(id.clone(), path.clone(), git::file_at(p, &id, &path)));
     }
@@ -586,15 +648,24 @@ impl RepoTab {
 
     /// Click handling with ⌘/Ctrl (toggle) and Shift (range) modifiers.
     pub fn click_change(&mut self, staged: bool, path: String, modifiers: egui::Modifiers) {
-        let same_list = self.selected_change.as_ref().is_some_and(|(s, _)| *s == staged);
+        let same_list = self
+            .selected_change
+            .as_ref()
+            .is_some_and(|(s, _)| *s == staged);
         if !same_list || !(modifiers.command || modifiers.shift) {
             self.select_change(staged, path);
             return;
         }
         if modifiers.shift {
             let order = &self.change_order[usize::from(staged)];
-            let anchor = self.selection_anchor.clone().unwrap_or_else(|| path.clone());
-            let (a, b) = (order.iter().position(|p| *p == anchor), order.iter().position(|p| *p == path));
+            let anchor = self
+                .selection_anchor
+                .clone()
+                .unwrap_or_else(|| path.clone());
+            let (a, b) = (
+                order.iter().position(|p| *p == anchor),
+                order.iter().position(|p| *p == path),
+            );
             if let (Some(a), Some(b)) = (a, b) {
                 let (lo, hi) = (a.min(b), a.max(b));
                 if !modifiers.command {
@@ -605,7 +676,11 @@ impl RepoTab {
             self.focus_change(staged, path);
         } else if self.selected_changes.contains(&path) {
             self.selected_changes.remove(&path);
-            if self.selected_change.as_ref().is_some_and(|(_, p)| *p == path) {
+            if self
+                .selected_change
+                .as_ref()
+                .is_some_and(|(_, p)| *p == path)
+            {
                 if let Some(next) = self.selected_changes.iter().next().cloned() {
                     self.focus_change(staged, next);
                 } else {
@@ -633,8 +708,13 @@ impl RepoTab {
 
     /// Selects a group of files (e.g. everything in a folder); `add` keeps the current selection.
     pub fn select_changes(&mut self, staged: bool, paths: Vec<String>, add: bool) {
-        let Some(first) = paths.first().cloned() else { return };
-        let same_list = self.selected_change.as_ref().is_some_and(|(s, _)| *s == staged);
+        let Some(first) = paths.first().cloned() else {
+            return;
+        };
+        let same_list = self
+            .selected_change
+            .as_ref()
+            .is_some_and(|(s, _)| *s == staged);
         if add && same_list {
             self.selected_changes.extend(paths);
         } else {
@@ -644,16 +724,30 @@ impl RepoTab {
     }
 
     pub fn is_change_selected(&self, staged: bool, path: &str) -> bool {
-        self.selected_change.as_ref().is_some_and(|(s, _)| *s == staged) && self.selected_changes.contains(path)
+        self.selected_change
+            .as_ref()
+            .is_some_and(|(s, _)| *s == staged)
+            && self.selected_changes.contains(path)
     }
 
     /// Selected files of one list, in list order.
     pub fn selected_files(&self, staged: bool) -> Vec<FileChange> {
-        if !self.selected_change.as_ref().is_some_and(|(s, _)| *s == staged) {
+        if !self
+            .selected_change
+            .as_ref()
+            .is_some_and(|(s, _)| *s == staged)
+        {
             return Vec::new();
         }
-        let list = if staged { &self.status.staged } else { &self.status.unstaged };
-        list.iter().filter(|f| self.selected_changes.contains(&f.path)).cloned().collect()
+        let list = if staged {
+            &self.status.staged
+        } else {
+            &self.status.unstaged
+        };
+        list.iter()
+            .filter(|f| self.selected_changes.contains(&f.path))
+            .cloned()
+            .collect()
     }
 
     /// Whether a path passes the local changes filter (case-insensitive substring).
@@ -664,13 +758,25 @@ impl RepoTab {
 
     /// Files of one list that pass the filter.
     pub fn visible_changes(&self, staged: bool) -> Vec<FileChange> {
-        let list = if staged { &self.status.staged } else { &self.status.unstaged };
-        list.iter().filter(|f| self.change_matches(&f.path)).cloned().collect()
+        let list = if staged {
+            &self.status.staged
+        } else {
+            &self.status.unstaged
+        };
+        list.iter()
+            .filter(|f| self.change_matches(&f.path))
+            .cloned()
+            .collect()
     }
 
     /// Drops selected files hidden by the filter.
     pub fn apply_changes_filter(&mut self) {
-        let keep: BTreeSet<String> = self.selected_changes.iter().filter(|p| self.change_matches(p)).cloned().collect();
+        let keep: BTreeSet<String> = self
+            .selected_changes
+            .iter()
+            .filter(|p| self.change_matches(p))
+            .cloned()
+            .collect();
         self.selected_changes = keep;
         if let Some((staged, path)) = self.selected_change.clone() {
             if !self.change_matches(&path) {
@@ -687,7 +793,9 @@ impl RepoTab {
 
     pub fn select_all_changes(&mut self, staged: bool) {
         let list = self.visible_changes(staged);
-        let Some(first) = list.first().map(|f| f.path.clone()) else { return };
+        let Some(first) = list.first().map(|f| f.path.clone()) else {
+            return;
+        };
         let all: BTreeSet<String> = list.iter().map(|f| f.path.clone()).collect();
         let focus = match &self.selected_change {
             Some((s, p)) if *s == staged => p.clone(),
@@ -699,9 +807,13 @@ impl RepoTab {
 
     /// Moves the focus up/down in the list with the current selection (arrow keys).
     pub fn move_change_selection(&mut self, delta: i32, extend: bool) {
-        let Some((staged, path)) = self.selected_change.clone() else { return };
+        let Some((staged, path)) = self.selected_change.clone() else {
+            return;
+        };
         let order = &self.change_order[usize::from(staged)];
-        let Some(i) = order.iter().position(|p| *p == path) else { return };
+        let Some(i) = order.iter().position(|p| *p == path) else {
+            return;
+        };
         let j = (i as i64 + delta as i64).clamp(0, order.len() as i64 - 1) as usize;
         let next = order[j].clone();
         if extend {
@@ -734,24 +846,38 @@ impl RepoTab {
 
     /// Resolves a conflicted file by taking our or their version entirely.
     pub fn take_conflict_side(&mut self, path: &str, ours: bool) {
-        let Some(kind) = self.status.conflicts.get(path).copied() else { return };
+        let Some(kind) = self.status.conflicts.get(path).copied() else {
+            return;
+        };
         let side = if ours { "local" } else { "remote" };
         self.merge_editor = None;
-        self.git_seq(format!("Use {side} version of {path}"), git::conflict::take_side_commands(path, kind, ours));
+        self.git_seq(
+            format!("Use {side} version of {path}"),
+            git::conflict::take_side_commands(path, kind, ours),
+        );
     }
 
     /// Opens the built-in merge editor for a conflicted text file.
     pub fn open_merge_editor(&mut self, path: &str) -> Result<(), String> {
-        let bytes = std::fs::read(self.path.join(path)).map_err(|e| format!("Cannot read {path}: {e}"))?;
-        let text = String::from_utf8(bytes).map_err(|_| "This file is not UTF-8 text; use an external merge tool.".to_owned())?;
-        let segments = git::conflict::parse(&text).ok_or_else(|| "No conflict markers found in the file.".to_owned())?;
-        self.merge_editor = Some(MergeEditor { path: path.to_owned(), segments, scroll_to: Some(0) });
+        let bytes =
+            std::fs::read(self.path.join(path)).map_err(|e| format!("Cannot read {path}: {e}"))?;
+        let text = String::from_utf8(bytes)
+            .map_err(|_| "This file is not UTF-8 text; use an external merge tool.".to_owned())?;
+        let segments = git::conflict::parse(&text)
+            .ok_or_else(|| "No conflict markers found in the file.".to_owned())?;
+        self.merge_editor = Some(MergeEditor {
+            path: path.to_owned(),
+            segments,
+            scroll_to: Some(0),
+        });
         Ok(())
     }
 
     /// Writes the merged content and marks the file resolved.
     pub fn save_merge(&mut self) {
-        let Some(editor) = self.merge_editor.take() else { return };
+        let Some(editor) = self.merge_editor.take() else {
+            return;
+        };
         let Some(content) = git::conflict::render(&editor.segments) else {
             self.merge_editor = Some(editor);
             return;
@@ -761,7 +887,8 @@ impl RepoTab {
             format!("Resolve {path}"),
             OpKind::Generic,
             Box::new(move |repo| {
-                std::fs::write(repo.join(&path), content).map_err(|e| format!("Cannot write {path}: {e}"))?;
+                std::fs::write(repo.join(&path), content)
+                    .map_err(|e| format!("Cannot write {path}: {e}"))?;
                 cmd::run(repo, &["add", "--", &path])
             }),
         );
@@ -788,9 +915,15 @@ impl RepoTab {
     pub fn select_history_entry(&mut self, index: usize) {
         let context = self.diff_context;
         let ws = self.ignore_whitespace;
-        let Some(h) = self.file_history.as_mut() else { return };
-        let Loaded::Ready(entries) = &h.entries else { return };
-        let Some(entry) = entries.get(index).cloned() else { return };
+        let Some(h) = self.file_history.as_mut() else {
+            return;
+        };
+        let Loaded::Ready(entries) = &h.entries else {
+            return;
+        };
+        let Some(entry) = entries.get(index).cloned() else {
+            return;
+        };
         h.selected = Some(index);
         h.scroll_to_selected = true;
         if crate::preview::is_image_path(&entry.file.path) {
@@ -801,13 +934,25 @@ impl RepoTab {
         let path = h.path.clone();
         self.spawn(move |p| {
             let parent = entry.commit.parents.first().cloned();
-            let result = diff::commit_file_diff(p, &entry.commit.id, parent.as_deref(), &entry.file, context, ws);
+            let result = diff::commit_file_diff(
+                p,
+                &entry.commit.id,
+                parent.as_deref(),
+                &entry.file,
+                context,
+                ws,
+            );
             Msg::HistoryDiff(entry.commit.id, path, result)
         });
     }
 
     /// Loads and decodes two versions of an image in the background, once per `key`.
-    pub fn request_images(&mut self, key: &str, old: Option<crate::preview::Source>, new: Option<crate::preview::Source>) {
+    pub fn request_images(
+        &mut self,
+        key: &str,
+        old: Option<crate::preview::Source>,
+        new: Option<crate::preview::Source>,
+    ) {
         if self.image_previews.contains_key(key) {
             return;
         }
@@ -822,9 +967,17 @@ impl RepoTab {
     pub fn reload_change_diff(&mut self) {
         // Working-tree images may have changed on disk.
         self.image_previews.retain(|k, _| !k.starts_with("work:"));
-        let Some((staged, path)) = self.selected_change.clone() else { return };
-        let list = if staged { &self.status.staged } else { &self.status.unstaged };
-        let Some(file) = list.iter().find(|f| f.path == path).cloned() else { return };
+        let Some((staged, path)) = self.selected_change.clone() else {
+            return;
+        };
+        let list = if staged {
+            &self.status.staged
+        } else {
+            &self.status.unstaged
+        };
+        let Some(file) = list.iter().find(|f| f.path == path).cloned() else {
+            return;
+        };
         let key = DiffKey::Work { path, staged };
         if !self.change_diff.as_ref().is_some_and(|(k, _)| *k == key) {
             self.change_diff = Some((key.clone(), Loaded::Loading));
@@ -833,11 +986,21 @@ impl RepoTab {
         let generation = self.diff_gen;
         let context = self.diff_context;
         let ws = self.ignore_whitespace;
-        self.spawn(move |p| Msg::Diff(key, generation, diff::working_diff(p, &file, staged, context, ws)));
+        self.spawn(move |p| {
+            Msg::Diff(
+                key,
+                generation,
+                diff::working_diff(p, &file, staged, context, ws),
+            )
+        });
     }
 
     pub fn change_file(&self, staged: bool, path: &str) -> Option<&FileChange> {
-        let list = if staged { &self.status.staged } else { &self.status.unstaged };
+        let list = if staged {
+            &self.status.staged
+        } else {
+            &self.status.unstaged
+        };
         list.iter().find(|f| f.path == path)
     }
 
@@ -845,7 +1008,11 @@ impl RepoTab {
     // Operations
 
     pub fn run_task(&mut self, label: impl Into<String>, kind: OpKind, task: Task) {
-        let _ = self.jobs.send(Job { label: label.into(), kind, task });
+        let _ = self.jobs.send(Job {
+            label: label.into(),
+            kind,
+            task,
+        });
     }
 
     /// Queues `git <args>`.
@@ -895,15 +1062,22 @@ impl RepoTab {
         let mut args: Vec<String> = if has_head {
             vec!["reset".into(), "-q".into(), "HEAD".into(), "--".into()]
         } else {
-            vec!["rm".into(), "--cached".into(), "-r".into(), "-q".into(), "--".into()]
+            vec![
+                "rm".into(),
+                "--cached".into(),
+                "-r".into(),
+                "-q".into(),
+                "--".into(),
+            ]
         };
         args.extend(paths);
         self.git("Unstage", args);
     }
 
     pub fn discard(&mut self, files: Vec<FileChange>) {
-        let (untracked, tracked): (Vec<_>, Vec<_>) =
-            files.into_iter().partition(|f| f.kind == git::ChangeKind::Untracked);
+        let (untracked, tracked): (Vec<_>, Vec<_>) = files
+            .into_iter()
+            .partition(|f| f.kind == git::ChangeKind::Untracked);
         let mut commands = Vec::new();
         if !tracked.is_empty() {
             let mut args: Vec<String> = vec!["checkout".into(), "--".into()];
@@ -920,13 +1094,20 @@ impl RepoTab {
 
     /// Stage/unstage/discard part of the current working diff.
     pub fn apply_partial(&mut self, selection: Selection, action: PatchAction) {
-        let Some((DiffKey::Work { staged, .. }, Loaded::Ready(d))) = &self.change_diff else { return };
+        let Some((DiffKey::Work { staged, .. }, Loaded::Ready(d))) = &self.change_diff else {
+            return;
+        };
         let reverse = matches!(action, PatchAction::Unstage | PatchAction::Discard);
         debug_assert_eq!(*staged, action == PatchAction::Unstage);
-        let Some(patch) = diff::build_patch(d, &selection, reverse) else { return };
+        let Some(patch) = diff::build_patch(d, &selection, reverse) else {
+            return;
+        };
         let (label, args): (&str, &[&str]) = match action {
             PatchAction::Stage => ("Stage lines", &["apply", "--cached", "--recount", "-"]),
-            PatchAction::Unstage => ("Unstage lines", &["apply", "--cached", "--reverse", "--recount", "-"]),
+            PatchAction::Unstage => (
+                "Unstage lines",
+                &["apply", "--cached", "--reverse", "--recount", "-"],
+            ),
             PatchAction::Discard => ("Discard lines", &["apply", "--reverse", "--recount", "-"]),
         };
         let args: Vec<String> = args.iter().map(|s| s.to_string()).collect();
@@ -991,22 +1172,42 @@ impl RepoTab {
     }
 
     pub fn fetch_all(&mut self) {
-        self.git("Fetch", vec!["fetch".into(), "--all".into(), "--prune".into(), "--tags".into()]);
+        self.git(
+            "Fetch",
+            vec![
+                "fetch".into(),
+                "--all".into(),
+                "--prune".into(),
+                "--tags".into(),
+            ],
+        );
     }
 
     pub fn checkout(&mut self, target: &str) {
-        self.git(format!("Checkout {target}"), vec!["checkout".into(), target.into()]);
+        self.git(
+            format!("Checkout {target}"),
+            vec!["checkout".into(), target.into()],
+        );
     }
 
     /// Checks out a remote branch, creating (or reusing) a local tracking branch.
     pub fn checkout_remote(&mut self, remote_branch: &str) {
-        let local = remote_branch.split_once('/').map(|(_, b)| b).unwrap_or(remote_branch);
+        let local = remote_branch
+            .split_once('/')
+            .map(|(_, b)| b)
+            .unwrap_or(remote_branch);
         if self.refs.local_branch(local).is_some() {
             self.checkout(local);
         } else {
             self.git(
                 format!("Checkout {remote_branch}"),
-                vec!["checkout".into(), "-b".into(), local.into(), "--track".into(), remote_branch.into()],
+                vec![
+                    "checkout".into(),
+                    "-b".into(),
+                    local.into(),
+                    "--track".into(),
+                    remote_branch.into(),
+                ],
             );
         }
     }
@@ -1025,11 +1226,21 @@ impl RepoTab {
             format!("Saved {name}"),
             OpKind::Notify,
             Box::new(move |repo| {
-                let (bytes, pointer) = git::lfs::resolve(repo, &path, git::file_at(repo, &id, &path)?);
-                std::fs::write(&dest, &bytes).map_err(|e| format!("Could not write {}: {e}", dest.display()))?;
+                let (bytes, pointer) =
+                    git::lfs::resolve(repo, &path, git::file_at(repo, &id, &path)?);
+                std::fs::write(&dest, &bytes)
+                    .map_err(|e| format!("Could not write {}: {e}", dest.display()))?;
                 let size = crate::format::human_size(bytes.len() as u64);
-                let note = if pointer { " — LFS pointer only; the LFS object could not be fetched" } else { "" };
-                Ok(format!("{} ({size}) from {}{note}", dest.display(), git::short(&id)))
+                let note = if pointer {
+                    " — LFS pointer only; the LFS object could not be fetched"
+                } else {
+                    ""
+                };
+                Ok(format!(
+                    "{} ({size}) from {}{note}",
+                    dest.display(),
+                    git::short(&id)
+                ))
             }),
         );
     }
@@ -1039,7 +1250,9 @@ impl RepoTab {
     }
 
     pub fn open_in_file_manager(&self, sub: Option<&str>) {
-        let target = sub.map(|s| self.path.join(s)).unwrap_or_else(|| self.path.clone());
+        let target = sub
+            .map(|s| self.path.join(s))
+            .unwrap_or_else(|| self.path.clone());
         crate::platform::reveal(&target);
     }
 }
@@ -1073,14 +1286,21 @@ mod tests {
         let mut tab = RepoTab::open(std::env::temp_dir(), egui::Context::default(), 10);
         tab.status.unstaged = names
             .iter()
-            .map(|n| FileChange { path: n.to_string(), old_path: None, kind: ChangeKind::Modified })
+            .map(|n| FileChange {
+                path: n.to_string(),
+                old_path: None,
+                kind: ChangeKind::Modified,
+            })
             .collect();
         tab.change_order[0] = names.iter().map(|n| n.to_string()).collect();
         tab
     }
 
     fn selected(tab: &RepoTab) -> Vec<String> {
-        tab.selected_files(false).into_iter().map(|f| f.path).collect()
+        tab.selected_files(false)
+            .into_iter()
+            .map(|f| f.path)
+            .collect()
     }
 
     #[test]

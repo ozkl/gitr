@@ -38,7 +38,9 @@ fn main() -> eframe::Result {
 
     // Launched by git/ssh to ask for credentials: show the prompt dialog only.
     if askpass::is_askpass_invocation() {
-        let prompt = std::env::args().nth(1).unwrap_or_else(|| "Password:".to_owned());
+        let prompt = std::env::args()
+            .nth(1)
+            .unwrap_or_else(|| "Password:".to_owned());
         std::process::exit(askpass::run(prompt));
     }
     if let Ok(exe) = std::env::current_exe() {
@@ -57,10 +59,17 @@ fn main() -> eframe::Result {
     // Keep the window visible while capturing (occluded windows are not rendered).
     #[cfg(feature = "screenshot")]
     let options = if std::env::var("GITR_SCREENSHOT").is_ok() {
-        eframe::NativeOptions { viewport: options.viewport.with_always_on_top(), ..options }
+        eframe::NativeOptions {
+            viewport: options.viewport.with_always_on_top(),
+            ..options
+        }
     } else {
         options
     };
     // "gitr" is the storage id (settings folder); the visible name is "Gitr".
-    eframe::run_native("gitr", options, Box::new(|cc| Ok(Box::new(app::GitrApp::new(cc)))))
+    eframe::run_native(
+        "gitr",
+        options,
+        Box::new(|cc| Ok(Box::new(app::GitrApp::new(cc)))),
+    )
 }

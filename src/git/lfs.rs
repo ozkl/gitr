@@ -24,8 +24,13 @@ pub fn pointer_size(bytes: &[u8]) -> Option<u64> {
 
 /// Replaces a pointer with the real content (from the local LFS cache, or downloaded).
 pub fn smudge(repo: &Path, path: &str, pointer: &[u8]) -> Result<Vec<u8>, String> {
-    cmd::run_with_input_bytes(repo, &["lfs", "smudge", "--", path], pointer)
-        .map_err(|e| if e.is_empty() { "git-lfs could not fetch the file".to_owned() } else { e })
+    cmd::run_with_input_bytes(repo, &["lfs", "smudge", "--", path], pointer).map_err(|e| {
+        if e.is_empty() {
+            "git-lfs could not fetch the file".to_owned()
+        } else {
+            e
+        }
+    })
 }
 
 /// The bytes a user expects for `path`: pointers are resolved through git-lfs when possible.
@@ -59,7 +64,9 @@ pub fn lfs_paths(repo: &Path, source: Option<&str>, paths: &[String]) -> HashSet
     args.push("filter");
     let out = cmd::run_with_input_bytes(repo, &args, &input)
         // `--source` needs git 2.40+; fall back to working-tree attributes.
-        .or_else(|_| cmd::run_with_input_bytes(repo, &["check-attr", "-z", "--stdin", "filter"], &input))
+        .or_else(|_| {
+            cmd::run_with_input_bytes(repo, &["check-attr", "-z", "--stdin", "filter"], &input)
+        })
         .unwrap_or_default();
     let out = String::from_utf8_lossy(&out);
     // Output: <path> NUL <attribute> NUL <value> NUL ...
@@ -90,7 +97,11 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         cmd::run(&dir, &["init", "-q"]).unwrap();
-        std::fs::write(dir.join(".gitattributes"), "*.psd filter=lfs diff=lfs merge=lfs -text\n").unwrap();
+        std::fs::write(
+            dir.join(".gitattributes"),
+            "*.psd filter=lfs diff=lfs merge=lfs -text\n",
+        )
+        .unwrap();
         let paths = vec!["art/cover.psd".to_owned(), "src/main.rs".to_owned()];
         let lfs = lfs_paths(&dir, None, &paths);
         assert!(lfs.contains("art/cover.psd"));

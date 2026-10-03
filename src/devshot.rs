@@ -19,17 +19,27 @@ impl DevShot {
         Self {
             path: std::env::var("GITR_SCREENSHOT").ok(),
             started: Instant::now(),
-            delay: std::env::var("GITR_SCREENSHOT_DELAY").ok().and_then(|d| d.parse().ok()).unwrap_or(3.0),
+            delay: std::env::var("GITR_SCREENSHOT_DELAY")
+                .ok()
+                .and_then(|d| d.parse().ok())
+                .unwrap_or(3.0),
             requested: false,
             actions: std::env::var("GITR_DEV")
-                .map(|s| s.split(',').map(|a| a.trim().to_owned()).filter(|a| !a.is_empty()).collect())
+                .map(|s| {
+                    s.split(',')
+                        .map(|a| a.trim().to_owned())
+                        .filter(|a| !a.is_empty())
+                        .collect()
+                })
                 .unwrap_or_default(),
             actions_applied: false,
         }
     }
 
     pub fn tick(&mut self, ctx: &egui::Context) {
-        let Some(path) = self.path.clone() else { return };
+        let Some(path) = self.path.clone() else {
+            return;
+        };
         ctx.request_repaint();
         if !self.requested && self.started.elapsed().as_secs_f64() > self.delay {
             self.requested = true;
@@ -43,7 +53,8 @@ impl DevShot {
         });
         if let Some(image) = image {
             let [w, h] = image.size;
-            let buf = image::RgbaImage::from_raw(w as u32, h as u32, image.as_raw().to_vec()).expect("image size");
+            let buf = image::RgbaImage::from_raw(w as u32, h as u32, image.as_raw().to_vec())
+                .expect("image size");
             buf.save(&path).expect("save screenshot");
             std::process::exit(0);
         }

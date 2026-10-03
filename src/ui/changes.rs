@@ -5,11 +5,11 @@ use egui_phosphor::regular as icon;
 
 use crate::git::{ChangeKind, FileChange};
 use crate::repo::{Loaded, RepoTab};
-use crate::ui::diff_view::{self, DiffMode, DiffRequest, DiffState};
+use crate::ui::Ctx;
 use crate::ui::dialogs::Dialog;
+use crate::ui::diff_view::{self, DiffMode, DiffRequest, DiffState};
 use crate::ui::history::copy_menu_item;
 use crate::ui::theme;
-use crate::ui::Ctx;
 
 fn s(v: &str) -> String {
     v.to_owned()
@@ -18,44 +18,79 @@ fn s(v: &str) -> String {
 pub fn changes_view(ui: &mut egui::Ui, tab: &mut RepoTab, cx: &mut Ctx) {
     if let Some(state) = tab.refs.state {
         let p = theme::pal(ui);
-        egui::Frame::new().fill(p.warning_bg).inner_margin(egui::Margin::symmetric(10, 6)).corner_radius(4).show(ui, |ui| {
-            ui.horizontal(|ui| {
-                ui.label(RichText::new(format!("{} {}", icon::WARNING, state.label())).strong());
-                let conflicts = tab.status.unstaged.iter().filter(|f| f.kind == ChangeKind::Conflicted).count();
-                if conflicts > 0 {
-                    ui.label(format!("— {conflicts} conflicted file{}", if conflicts == 1 { "" } else { "s" }));
-                }
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    let cmd = state.command();
-                    if ui.button("Abort").clicked() {
-                        *cx.dialog = Some(Dialog::confirm(
-                            format!("Abort {cmd}"),
-                            format!("Abort the {cmd} in progress and restore the previous state?"),
-                            "Abort",
-                            format!("Abort {cmd}"),
-                            vec![vec![s(cmd), s("--abort")]],
+        egui::Frame::new()
+            .fill(p.warning_bg)
+            .inner_margin(egui::Margin::symmetric(10, 6))
+            .corner_radius(4)
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(
+                        RichText::new(format!("{} {}", icon::WARNING, state.label())).strong(),
+                    );
+                    let conflicts = tab
+                        .status
+                        .unstaged
+                        .iter()
+                        .filter(|f| f.kind == ChangeKind::Conflicted)
+                        .count();
+                    if conflicts > 0 {
+                        ui.label(format!(
+                            "— {conflicts} conflicted file{}",
+                            if conflicts == 1 { "" } else { "s" }
                         ));
                     }
-                    if cmd != "merge" && ui.button("Skip").clicked() {
-                        tab.git(format!("Skip ({cmd})"), vec![s(cmd), s("--skip")]);
-                    }
-                    if ui.add_enabled(conflicts == 0, egui::Button::new("Continue")).clicked() {
-                        if cmd == "merge" {
-                            tab.git("Continue merge", vec![s("-c"), s("core.editor=true"), s("commit"), s("--no-edit")]);
-                        } else {
-                            tab.git(format!("Continue {cmd}"), vec![s("-c"), s("core.editor=true"), s(cmd), s("--continue")]);
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let cmd = state.command();
+                        if ui.button("Abort").clicked() {
+                            *cx.dialog = Some(Dialog::confirm(
+                                format!("Abort {cmd}"),
+                                format!(
+                                    "Abort the {cmd} in progress and restore the previous state?"
+                                ),
+                                "Abort",
+                                format!("Abort {cmd}"),
+                                vec![vec![s(cmd), s("--abort")]],
+                            ));
                         }
-                    }
+                        if cmd != "merge" && ui.button("Skip").clicked() {
+                            tab.git(format!("Skip ({cmd})"), vec![s(cmd), s("--skip")]);
+                        }
+                        if ui
+                            .add_enabled(conflicts == 0, egui::Button::new("Continue"))
+                            .clicked()
+                        {
+                            if cmd == "merge" {
+                                tab.git(
+                                    "Continue merge",
+                                    vec![
+                                        s("-c"),
+                                        s("core.editor=true"),
+                                        s("commit"),
+                                        s("--no-edit"),
+                                    ],
+                                );
+                            } else {
+                                tab.git(
+                                    format!("Continue {cmd}"),
+                                    vec![s("-c"), s("core.editor=true"), s(cmd), s("--continue")],
+                                );
+                            }
+                        }
+                    });
                 });
             });
-        });
         ui.add_space(4.0);
     }
 
     // Keyboard: arrows move (Shift extends), ⌘/Ctrl+A selects the whole list.
     if cx.dialog.is_none() && !ui.ctx().egui_wants_keyboard_input() {
         let (up, down, shift, all) = ui.input(|i| {
-            (i.key_pressed(Key::ArrowUp), i.key_pressed(Key::ArrowDown), i.modifiers.shift, i.modifiers.command && i.key_pressed(Key::A))
+            (
+                i.key_pressed(Key::ArrowUp),
+                i.key_pressed(Key::ArrowDown),
+                i.modifiers.shift,
+                i.modifiers.command && i.key_pressed(Key::A),
+            )
         });
         if up || down {
             tab.move_change_selection(if up { -1 } else { 1 }, shift);
@@ -71,10 +106,21 @@ pub fn changes_view(ui: &mut egui::Ui, tab: &mut RepoTab, cx: &mut Ctx) {
         .resizable(true)
         .default_size(380.0)
         .min_size(240.0)
-        .frame(egui::Frame::new().inner_margin(egui::Margin { left: 0, right: 6, top: 0, bottom: 0 }))
+        .frame(egui::Frame::new().inner_margin(egui::Margin {
+            left: 0,
+            right: 6,
+            top: 0,
+            bottom: 0,
+        }))
         .show(ui, |ui| {
-            egui::Panel::bottom("commit_box").frame(egui::Frame::new()).resizable(false).show(ui, |ui| commit_box(ui, tab, cx));
-            egui::Panel::top("changes_filter").frame(egui::Frame::new()).resizable(false).show(ui, |ui| filter_bar(ui, tab));
+            egui::Panel::bottom("commit_box")
+                .frame(egui::Frame::new())
+                .resizable(false)
+                .show(ui, |ui| commit_box(ui, tab, cx));
+            egui::Panel::top("changes_filter")
+                .frame(egui::Frame::new())
+                .resizable(false)
+                .show(ui, |ui| filter_bar(ui, tab));
             let half = (ui.available_height() / 2.0).max(120.0);
             egui::Panel::top("unstaged_panel")
                 .frame(egui::Frame::new())
@@ -93,7 +139,11 @@ fn filter_bar(ui: &mut egui::Ui, tab: &mut RepoTab) {
     ui.add_space(4.0);
     let before = tab.changes_filter.clone();
     ui.horizontal(|ui| {
-        let clear_w = if tab.changes_filter.is_empty() { 0.0 } else { 28.0 };
+        let clear_w = if tab.changes_filter.is_empty() {
+            0.0
+        } else {
+            28.0
+        };
         let edit = egui::TextEdit::singleline(&mut tab.changes_filter)
             .hint_text(format!("{} Filter", icon::MAGNIFYING_GLASS))
             .desired_width(ui.available_width() - clear_w);
@@ -105,7 +155,12 @@ fn filter_bar(ui: &mut egui::Ui, tab: &mut RepoTab) {
         if r.lost_focus() && ui.input(|i| i.key_pressed(Key::Escape)) {
             tab.changes_filter.clear();
         }
-        if !tab.changes_filter.is_empty() && ui.small_button(icon::X).on_hover_text("Clear filter").clicked() {
+        if !tab.changes_filter.is_empty()
+            && ui
+                .small_button(icon::X)
+                .on_hover_text("Clear filter")
+                .clicked()
+        {
             tab.changes_filter.clear();
         }
     });
@@ -117,43 +172,84 @@ fn filter_bar(ui: &mut egui::Ui, tab: &mut RepoTab) {
 
 fn file_list(ui: &mut egui::Ui, tab: &mut RepoTab, cx: &mut Ctx, staged: bool) {
     let p = theme::pal(ui);
-    let total = if staged { tab.status.staged.len() } else { tab.status.unstaged.len() };
+    let total = if staged {
+        tab.status.staged.len()
+    } else {
+        tab.status.unstaged.len()
+    };
     let files: Vec<FileChange> = tab.visible_changes(staged);
     let filtered = files.len() != total;
     let selected = tab.selected_files(staged);
     ui.add_space(4.0);
     ui.horizontal(|ui| {
-        let title = if staged { "Staged Changes" } else { "Unstaged Changes" };
-        let count = if filtered { format!("{} of {total}", files.len()) } else { total.to_string() };
+        let title = if staged {
+            "Staged Changes"
+        } else {
+            "Unstaged Changes"
+        };
+        let count = if filtered {
+            format!("{} of {total}", files.len())
+        } else {
+            total.to_string()
+        };
         ui.label(RichText::new(format!("{title} ({count})")).strong());
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.menu_button(icon::LIST, |ui| {
                 let tree = &mut cx.settings.changes_tree_view;
-                if ui.add(egui::Button::selectable(!*tree, "View as List")).clicked() {
+                if ui
+                    .add(egui::Button::selectable(!*tree, "View as List"))
+                    .clicked()
+                {
                     *tree = false;
                     ui.close();
                 }
-                if ui.add(egui::Button::selectable(*tree, "View as Tree")).clicked() {
+                if ui
+                    .add(egui::Button::selectable(*tree, "View as Tree"))
+                    .clicked()
+                {
                     *tree = true;
                     ui.close();
                 }
                 ui.separator();
                 let paths: Vec<String> = files.iter().map(|f| f.path.clone()).collect();
                 if staged {
-                    let label = if filtered { format!("{} Unstage {} Shown", icon::MINUS, files.len()) } else { format!("{} Unstage All", icon::MINUS) };
-                    if ui.add_enabled(!files.is_empty(), egui::Button::new(label)).clicked() {
+                    let label = if filtered {
+                        format!("{} Unstage {} Shown", icon::MINUS, files.len())
+                    } else {
+                        format!("{} Unstage All", icon::MINUS)
+                    };
+                    if ui
+                        .add_enabled(!files.is_empty(), egui::Button::new(label))
+                        .clicked()
+                    {
                         tab.unstage(paths);
                         ui.close();
                     }
                 } else {
-                    let label = if filtered { format!("{} Stage {} Shown", icon::PLUS, files.len()) } else { format!("{} Stage All", icon::PLUS) };
-                    if ui.add_enabled(!files.is_empty(), egui::Button::new(label)).clicked() {
+                    let label = if filtered {
+                        format!("{} Stage {} Shown", icon::PLUS, files.len())
+                    } else {
+                        format!("{} Stage All", icon::PLUS)
+                    };
+                    if ui
+                        .add_enabled(!files.is_empty(), egui::Button::new(label))
+                        .clicked()
+                    {
                         tab.stage(paths);
                         ui.close();
                     }
-                    let label = if filtered { format!("{} Discard {} Shown…", icon::TRASH, files.len()) } else { format!("{} Discard All…", icon::TRASH) };
-                    if ui.add_enabled(!files.is_empty(), egui::Button::new(label)).clicked() {
-                        *cx.dialog = Some(Dialog::Discard { files: files.clone() });
+                    let label = if filtered {
+                        format!("{} Discard {} Shown…", icon::TRASH, files.len())
+                    } else {
+                        format!("{} Discard All…", icon::TRASH)
+                    };
+                    if ui
+                        .add_enabled(!files.is_empty(), egui::Button::new(label))
+                        .clicked()
+                    {
+                        *cx.dialog = Some(Dialog::Discard {
+                            files: files.clone(),
+                        });
                         ui.close();
                     }
                 }
@@ -165,13 +261,23 @@ fn file_list(ui: &mut egui::Ui, tab: &mut RepoTab, cx: &mut Ctx, staged: bool) {
                 .map(|f| f.path.clone())
                 .collect();
             let verb = if staged { "Unstage" } else { "Stage" };
-            let label = if targets.len() > 1 { format!("{verb} ({})", targets.len()) } else { verb.to_owned() };
+            let label = if targets.len() > 1 {
+                format!("{verb} ({})", targets.len())
+            } else {
+                verb.to_owned()
+            };
             let hint = match targets.len() {
-                0 => "Select files first (⌘/Ctrl-click or Shift-click to select several)".to_owned(),
+                0 => {
+                    "Select files first (⌘/Ctrl-click or Shift-click to select several)".to_owned()
+                }
                 1 => format!("{verb} the selected file"),
                 n => format!("{verb} {n} selected files"),
             };
-            if ui.add_enabled(!targets.is_empty(), egui::Button::new(label)).on_hover_text(hint).clicked() {
+            if ui
+                .add_enabled(!targets.is_empty(), egui::Button::new(label))
+                .on_hover_text(hint)
+                .clicked()
+            {
                 if staged {
                     tab.unstage(targets);
                 } else {
@@ -198,18 +304,21 @@ fn file_list(ui: &mut egui::Ui, tab: &mut RepoTab, cx: &mut Ctx, staged: bool) {
 
     let tree_view = cx.settings.changes_tree_view;
     let mut rows = Rows::default();
-    egui::ScrollArea::vertical().id_salt(("files", staged)).auto_shrink(false).show(ui, |ui| {
-        ui.spacing_mut().item_spacing.y = 0.0;
-        if tree_view {
-            let root = build_tree(&files);
-            show_dir(ui, tab, cx, &files, &root, staged, "", 0, &mut rows);
-        } else {
-            for file in &files {
-                file_row(ui, tab, cx, file, staged, false, 0.0, &mut rows);
+    egui::ScrollArea::vertical()
+        .id_salt(("files", staged))
+        .auto_shrink(false)
+        .show(ui, |ui| {
+            ui.spacing_mut().item_spacing.y = 0.0;
+            if tree_view {
+                let root = build_tree(&files);
+                show_dir(ui, tab, cx, &files, &root, staged, "", 0, &mut rows);
+            } else {
+                for file in &files {
+                    file_row(ui, tab, cx, file, staged, false, 0.0, &mut rows);
+                }
             }
-        }
-        rows.paint_selection(ui, p.selection);
-    });
+            rows.paint_selection(ui, p.selection);
+        });
     tab.change_order[usize::from(staged)] = rows.order;
 }
 
@@ -229,11 +338,20 @@ impl Rows {
         let touches = |a: &egui::Rect, b: &egui::Rect| (a.bottom() - b.top()).abs() < 0.5;
         for (i, (idx, rect)) in self.selected.iter().enumerate() {
             let join_above = i > 0 && touches(&self.selected[i - 1].1, rect);
-            let join_below = self.selected.get(i + 1).is_some_and(|(_, next)| touches(rect, next));
+            let join_below = self
+                .selected
+                .get(i + 1)
+                .is_some_and(|(_, next)| touches(rect, next));
             let top = if join_above { 0 } else { R };
             let bottom = if join_below { 0 } else { R };
-            let radius = egui::CornerRadius { nw: top, ne: top, sw: bottom, se: bottom };
-            ui.painter().set(*idx, egui::epaint::RectShape::filled(*rect, radius, color));
+            let radius = egui::CornerRadius {
+                nw: top,
+                ne: top,
+                sw: bottom,
+                se: bottom,
+            };
+            ui.painter()
+                .set(*idx, egui::epaint::RectShape::filled(*rect, radius, color));
         }
     }
 }
@@ -286,28 +404,63 @@ fn show_dir(
         let key = (staged, path.clone());
         let open = !tab.collapsed_dirs.contains(&key);
 
-        let under: Vec<String> = files.iter().filter(|f| f.path.starts_with(&path)).map(|f| f.path.clone()).collect();
-        let all_selected = !under.is_empty() && under.iter().all(|f| tab.is_change_selected(staged, f));
-        let (rect, resp) = ui.allocate_exact_size(Vec2::new(ui.available_width(), 24.0), Sense::click());
+        let under: Vec<String> = files
+            .iter()
+            .filter(|f| f.path.starts_with(&path))
+            .map(|f| f.path.clone())
+            .collect();
+        let all_selected =
+            !under.is_empty() && under.iter().all(|f| tab.is_change_selected(staged, f));
+        let (rect, resp) =
+            ui.allocate_exact_size(Vec2::new(ui.available_width(), 24.0), Sense::click());
         if all_selected {
-            rows.selected.push((ui.painter().add(egui::Shape::Noop), rect));
+            rows.selected
+                .push((ui.painter().add(egui::Shape::Noop), rect));
         } else if resp.hovered() || resp.context_menu_opened() {
             ui.painter().rect_filled(rect, 3.0, p.hover);
         }
         let x = rect.left() + 4.0 + depth as f32 * INDENT;
         let y = rect.center().y;
-        let caret = if open { icon::CARET_DOWN } else { icon::CARET_RIGHT };
+        let caret = if open {
+            icon::CARET_DOWN
+        } else {
+            icon::CARET_RIGHT
+        };
         let painter = ui.painter().with_clip_rect(rect);
         let (icon_color, text_color) = if all_selected {
             (p.selection_text, p.selection_text)
         } else {
             (p.muted, ui.visuals().text_color())
         };
-        painter.text(egui::pos2(x + 6.0, y), egui::Align2::CENTER_CENTER, caret, egui::FontId::proportional(12.0), icon_color);
-        painter.text(egui::pos2(x + 22.0, y), egui::Align2::CENTER_CENTER, if open { icon::FOLDER_OPEN } else { icon::FOLDER }, egui::FontId::proportional(15.0), icon_color);
-        painter.text(egui::pos2(x + 34.0, y), egui::Align2::LEFT_CENTER, &label, egui::FontId::proportional(13.5), text_color);
+        painter.text(
+            egui::pos2(x + 6.0, y),
+            egui::Align2::CENTER_CENTER,
+            caret,
+            egui::FontId::proportional(12.0),
+            icon_color,
+        );
+        painter.text(
+            egui::pos2(x + 22.0, y),
+            egui::Align2::CENTER_CENTER,
+            if open {
+                icon::FOLDER_OPEN
+            } else {
+                icon::FOLDER
+            },
+            egui::FontId::proportional(15.0),
+            icon_color,
+        );
+        painter.text(
+            egui::pos2(x + 34.0, y),
+            egui::Align2::LEFT_CENTER,
+            &label,
+            egui::FontId::proportional(13.5),
+            text_color,
+        );
         // The caret toggles the folder; the rest of the row selects the files inside it.
-        let on_caret = resp.interact_pointer_pos().is_some_and(|pos| pos.x < x + 14.0);
+        let on_caret = resp
+            .interact_pointer_pos()
+            .is_some_and(|pos| pos.x < x + 14.0);
         if (resp.clicked() && on_caret) || resp.double_clicked() {
             if open {
                 tab.collapsed_dirs.insert(key);
@@ -319,10 +472,17 @@ fn show_dir(
             tab.select_changes(staged, under.clone(), add);
         }
         resp.context_menu(|ui| {
-            let under: Vec<FileChange> = files.iter().filter(|f| f.path.starts_with(&path)).cloned().collect();
+            let under: Vec<FileChange> = files
+                .iter()
+                .filter(|f| f.path.starts_with(&path))
+                .cloned()
+                .collect();
             let paths: Vec<String> = under.iter().map(|f| f.path.clone()).collect();
             if staged {
-                if ui.button(format!("{} Unstage Folder", icon::MINUS)).clicked() {
+                if ui
+                    .button(format!("{} Unstage Folder", icon::MINUS))
+                    .clicked()
+                {
                     tab.unstage(paths);
                     ui.close();
                 }
@@ -331,24 +491,39 @@ fn show_dir(
                     tab.stage(paths);
                     ui.close();
                 }
-                if ui.button(format!("{} Discard Folder…", icon::TRASH)).clicked() {
+                if ui
+                    .button(format!("{} Discard Folder…", icon::TRASH))
+                    .clicked()
+                {
                     *cx.dialog = Some(Dialog::Discard { files: under });
                     ui.close();
                 }
             }
             ui.separator();
-            if ui.button(format!("{} Show in file manager", icon::FOLDER_OPEN)).clicked() {
+            if ui
+                .button(format!("{} Show in file manager", icon::FOLDER_OPEN))
+                .clicked()
+            {
                 tab.open_in_file_manager(Some(path.trim_end_matches('/')));
                 ui.close();
             }
-            copy_menu_item(ui, &format!("{} Copy path", icon::COPY), path.trim_end_matches('/').to_owned());
+            copy_menu_item(
+                ui,
+                &format!("{} Copy path", icon::COPY),
+                path.trim_end_matches('/').to_owned(),
+            );
         });
         if open {
             show_dir(ui, tab, cx, files, child, staged, &path, depth + 1, rows);
         }
     }
     for &i in &node.files {
-        let indent = depth as f32 * INDENT + if depth > 0 || !node.dirs.is_empty() { 18.0 } else { 0.0 };
+        let indent = depth as f32 * INDENT
+            + if depth > 0 || !node.dirs.is_empty() {
+                18.0
+            } else {
+                0.0
+            };
         file_row(ui, tab, cx, &files[i], staged, true, indent, rows);
     }
 }
@@ -367,9 +542,11 @@ fn file_row(
     rows.order.push(file.path.clone());
     let p = theme::pal(ui);
     let selected = tab.is_change_selected(staged, &file.path);
-    let (rect, resp) = ui.allocate_exact_size(Vec2::new(ui.available_width(), 24.0), Sense::click());
+    let (rect, resp) =
+        ui.allocate_exact_size(Vec2::new(ui.available_width(), 24.0), Sense::click());
     if selected {
-        rows.selected.push((ui.painter().add(egui::Shape::Noop), rect));
+        rows.selected
+            .push((ui.painter().add(egui::Shape::Noop), rect));
     } else if resp.hovered() || resp.context_menu_opened() {
         ui.painter().rect_filled(rect, 3.0, p.hover);
     }
@@ -384,15 +561,41 @@ fn file_row(
         theme::lfs_badge(&mut child, selected);
     }
     let (dir, name) = theme::split_path(&file.path);
-    let text_color = if selected { p.selection_text } else { child.visuals().text_color() };
-    let muted = if selected { p.selection_text.gamma_multiply(0.8) } else { p.muted };
+    let text_color = if selected {
+        p.selection_text
+    } else {
+        child.visuals().text_color()
+    };
+    let muted = if selected {
+        p.selection_text.gamma_multiply(0.8)
+    } else {
+        p.muted
+    };
     let mut job = egui::text::LayoutJob::default();
-    job.append(name, 0.0, egui::TextFormat { color: text_color, ..Default::default() });
+    job.append(
+        name,
+        0.0,
+        egui::TextFormat {
+            color: text_color,
+            ..Default::default()
+        },
+    );
     if !dir.is_empty() && !name_only {
-        job.append(dir.trim_end_matches('/'), 8.0, egui::TextFormat { color: muted, ..Default::default() });
+        job.append(
+            dir.trim_end_matches('/'),
+            8.0,
+            egui::TextFormat {
+                color: muted,
+                ..Default::default()
+            },
+        );
     }
     child.add(egui::Label::new(job).truncate().selectable(false));
-    let resp = if name_only { resp.on_hover_text(&file.path) } else { resp };
+    let resp = if name_only {
+        resp.on_hover_text(&file.path)
+    } else {
+        resp
+    };
 
     if resp.clicked() {
         let modifiers = ui.input(|i| i.modifiers);
@@ -418,22 +621,46 @@ fn file_row(
 }
 
 /// Context menu / actions for several selected files.
-fn multi_menu(ui: &mut egui::Ui, tab: &mut RepoTab, cx: &mut Ctx, files: &[FileChange], staged: bool) {
+fn multi_menu(
+    ui: &mut egui::Ui,
+    tab: &mut RepoTab,
+    cx: &mut Ctx,
+    files: &[FileChange],
+    staged: bool,
+) {
     let n = files.len();
     let paths: Vec<String> = files.iter().map(|f| f.path.clone()).collect();
     if staged {
-        if ui.button(format!("{} Unstage {n} Files", icon::MINUS)).clicked() {
+        if ui
+            .button(format!("{} Unstage {n} Files", icon::MINUS))
+            .clicked()
+        {
             tab.unstage(paths.clone());
             ui.close();
         }
     } else {
-        let stageable: Vec<String> = files.iter().filter(|f| f.kind != ChangeKind::Conflicted).map(|f| f.path.clone()).collect();
-        if ui.add_enabled(!stageable.is_empty(), egui::Button::new(format!("{} Stage {} Files", icon::PLUS, stageable.len()))).clicked() {
+        let stageable: Vec<String> = files
+            .iter()
+            .filter(|f| f.kind != ChangeKind::Conflicted)
+            .map(|f| f.path.clone())
+            .collect();
+        if ui
+            .add_enabled(
+                !stageable.is_empty(),
+                egui::Button::new(format!("{} Stage {} Files", icon::PLUS, stageable.len())),
+            )
+            .clicked()
+        {
             tab.stage(stageable);
             ui.close();
         }
-        if ui.button(format!("{} Discard {n} Files…", icon::TRASH)).clicked() {
-            *cx.dialog = Some(Dialog::Discard { files: files.to_vec() });
+        if ui
+            .button(format!("{} Discard {n} Files…", icon::TRASH))
+            .clicked()
+        {
+            *cx.dialog = Some(Dialog::Discard {
+                files: files.to_vec(),
+            });
             ui.close();
         }
     }
@@ -456,8 +683,13 @@ fn file_menu(ui: &mut egui::Ui, tab: &mut RepoTab, cx: &mut Ctx, file: &FileChan
             tab.stage(vec![file.path.clone()]);
             ui.close();
         }
-        if ui.button(format!("{} Discard Changes…", icon::TRASH)).clicked() {
-            *cx.dialog = Some(Dialog::Discard { files: vec![file.clone()] });
+        if ui
+            .button(format!("{} Discard Changes…", icon::TRASH))
+            .clicked()
+        {
+            *cx.dialog = Some(Dialog::Discard {
+                files: vec![file.clone()],
+            });
             ui.close();
         }
         if file.kind == ChangeKind::Untracked {
@@ -469,7 +701,9 @@ fn file_menu(ui: &mut egui::Ui, tab: &mut RepoTab, cx: &mut Ctx, file: &FileChan
                     Box::new(move |repo| {
                         use std::io::Write;
                         let gitignore = repo.join(".gitignore");
-                        let needs_newline = std::fs::read(&gitignore).map(|b| !b.is_empty() && !b.ends_with(b"\n")).unwrap_or(false);
+                        let needs_newline = std::fs::read(&gitignore)
+                            .map(|b| !b.is_empty() && !b.ends_with(b"\n"))
+                            .unwrap_or(false);
                         let mut f = std::fs::OpenOptions::new()
                             .create(true)
                             .append(true)
@@ -486,8 +720,15 @@ fn file_menu(ui: &mut egui::Ui, tab: &mut RepoTab, cx: &mut Ctx, file: &FileChan
     }
     ui.separator();
     if file.kind != ChangeKind::Untracked && tab.refs.head_id.is_some() {
-        let path = file.old_path.clone().filter(|_| file.kind == ChangeKind::Renamed).unwrap_or_else(|| file.path.clone());
-        if ui.button(format!("{} History…", icon::CLOCK_COUNTER_CLOCKWISE)).clicked() {
+        let path = file
+            .old_path
+            .clone()
+            .filter(|_| file.kind == ChangeKind::Renamed)
+            .unwrap_or_else(|| file.path.clone());
+        if ui
+            .button(format!("{} History…", icon::CLOCK_COUNTER_CLOCKWISE))
+            .clicked()
+        {
             tab.open_file_history("HEAD", &path);
             ui.close();
         }
@@ -496,12 +737,19 @@ fn file_menu(ui: &mut egui::Ui, tab: &mut RepoTab, cx: &mut Ctx, file: &FileChan
         crate::platform::open_file(&tab.path.join(&file.path));
         ui.close();
     }
-    if ui.button(format!("{} Show in file manager", icon::FOLDER_OPEN)).clicked() {
+    if ui
+        .button(format!("{} Show in file manager", icon::FOLDER_OPEN))
+        .clicked()
+    {
         tab.open_in_file_manager(Some(&file.path));
         ui.close();
     }
     copy_menu_item(ui, &format!("{} Copy path", icon::COPY), file.path.clone());
-    copy_menu_item(ui, "Copy full path", tab.path.join(&file.path).display().to_string());
+    copy_menu_item(
+        ui,
+        "Copy full path",
+        tab.path.join(&file.path).display().to_string(),
+    );
 }
 
 fn conflict_actions(ui: &mut egui::Ui, tab: &mut RepoTab, file: &FileChange) {
@@ -514,19 +762,36 @@ fn conflict_actions(ui: &mut egui::Ui, tab: &mut RepoTab, file: &FileChange) {
         tab.take_conflict_side(&path, false);
         ui.close();
     }
-    if tab.status.conflicts.get(&path).is_some_and(|k| k.has_markers()) && ui.button("Merge in Gitr…").clicked() {
+    if tab
+        .status
+        .conflicts
+        .get(&path)
+        .is_some_and(|k| k.has_markers())
+        && ui.button("Merge in Gitr…").clicked()
+    {
         tab.select_change(false, path.clone());
         if let Err(e) = tab.open_merge_editor(&path) {
-            tab.notices.push(crate::repo::Notice { title: "Cannot open merge editor".into(), text: e, error: true });
+            tab.notices.push(crate::repo::Notice {
+                title: "Cannot open merge editor".into(),
+                text: e,
+                error: true,
+            });
         }
         ui.close();
     }
     if ui.button("Open in external merge tool").clicked() {
-        tab.git(format!("Merge tool {path}"), vec![s("mergetool"), s("--no-prompt"), s("--"), path.clone()]);
+        tab.git(
+            format!("Merge tool {path}"),
+            vec![s("mergetool"), s("--no-prompt"), s("--"), path.clone()],
+        );
         ui.close();
     }
     ui.separator();
-    if ui.button("Mark as resolved").on_hover_text("Stage the file as it is now in the working tree").clicked() {
+    if ui
+        .button("Mark as resolved")
+        .on_hover_text("Stage the file as it is now in the working tree")
+        .clicked()
+    {
         tab.stage(vec![path.clone()]);
         ui.close();
     }
@@ -547,7 +812,11 @@ fn commit_box(ui: &mut egui::Ui, tab: &mut RepoTab, cx: &mut Ctx) {
     }
     let len = tab.commit_subject.chars().count();
     if len > 72 {
-        ui.label(RichText::new(format!("Subject is {len} characters (72 recommended)")).small().color(p.modified));
+        ui.label(
+            RichText::new(format!("Subject is {len} characters (72 recommended)"))
+                .small()
+                .color(p.modified),
+        );
     }
     ui.add(
         egui::TextEdit::multiline(&mut tab.commit_body)
@@ -558,10 +827,20 @@ fn commit_box(ui: &mut egui::Ui, tab: &mut RepoTab, cx: &mut Ctx) {
     // Who the commit will be attributed to; click to change it for this repository.
     let (text, color) = match &tab.refs.identity {
         Some(id) => (format!("{} {id}", icon::USER), p.muted),
-        None => (format!("{} No author identity set — click to configure", icon::WARNING), p.modified),
+        None => (
+            format!(
+                "{} No author identity set — click to configure",
+                icon::WARNING
+            ),
+            p.modified,
+        ),
     };
     let r = ui
-        .add(egui::Label::new(RichText::new(text).small().color(color)).truncate().sense(Sense::click()))
+        .add(
+            egui::Label::new(RichText::new(text).small().color(color))
+                .truncate()
+                .sense(Sense::click()),
+        )
         .on_hover_text("Change the author for this repository");
     if r.hovered() {
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
@@ -571,14 +850,20 @@ fn commit_box(ui: &mut egui::Ui, tab: &mut RepoTab, cx: &mut Ctx) {
     }
     ui.add_space(4.0);
     let unresolved = tab.status.conflicts.len();
-    let can_commit = (!tab.status.staged.is_empty() || tab.amend || tab.refs.state == Some(crate::git::RepoState::Merging))
+    let can_commit = (!tab.status.staged.is_empty()
+        || tab.amend
+        || tab.refs.state == Some(crate::git::RepoState::Merging))
         && !tab.commit_subject.trim().is_empty()
         && unresolved == 0;
     if unresolved > 0 {
         ui.label(
-            RichText::new(format!("{} Resolve {unresolved} conflicted file{} before committing", icon::WARNING, if unresolved == 1 { "" } else { "s" }))
-                .small()
-                .color(p.modified),
+            RichText::new(format!(
+                "{} Resolve {unresolved} conflicted file{} before committing",
+                icon::WARNING,
+                if unresolved == 1 { "" } else { "s" }
+            ))
+            .small()
+            .color(p.modified),
         );
     }
     let mut commit = false;
@@ -603,15 +888,27 @@ fn commit_box(ui: &mut egui::Ui, tab: &mut RepoTab, cx: &mut Ctx) {
                     }
                 });
             });
-            let label = if tab.amend { "Amend Last Commit" } else { "Commit" };
+            let label = if tab.amend {
+                "Amend Last Commit"
+            } else {
+                "Commit"
+            };
             let n = tab.status.staged.len();
-            let text = if tab.amend || n == 0 { label.to_owned() } else { format!("{label} {n} file{}", if n == 1 { "" } else { "s" }) };
+            let text = if tab.amend || n == 0 {
+                label.to_owned()
+            } else {
+                format!("{label} {n} file{}", if n == 1 { "" } else { "s" })
+            };
             let button = if can_commit {
                 egui::Button::new(RichText::new(text).color(egui::Color32::WHITE)).fill(p.selection)
             } else {
                 egui::Button::new(text)
             };
-            if ui.add_enabled(can_commit, button).on_hover_text("⌘/Ctrl + Enter").clicked() {
+            if ui
+                .add_enabled(can_commit, button)
+                .on_hover_text("⌘/Ctrl + Enter")
+                .clicked()
+            {
                 commit = true;
             }
         });
@@ -629,12 +926,18 @@ fn diff_panel(ui: &mut egui::Ui, tab: &mut RepoTab, cx: &mut Ctx) {
     let p = theme::pal(ui);
     let Some((staged, path)) = tab.selected_change.clone() else {
         ui.centered_and_justified(|ui| {
-            let msg = if tab.status.is_clean() { "Working tree clean" } else { "Select a file to view changes" };
+            let msg = if tab.status.is_clean() {
+                "Working tree clean"
+            } else {
+                "Select a file to view changes"
+            };
             ui.label(RichText::new(msg).color(p.muted));
         });
         return;
     };
-    let Some(file) = tab.change_file(staged, &path).cloned() else { return };
+    let Some(file) = tab.change_file(staged, &path).cloned() else {
+        return;
+    };
     let group = tab.selected_files(staged);
     if group.len() > 1 {
         selection_summary(ui, tab, cx, &group, staged);
@@ -657,13 +960,23 @@ fn diff_panel(ui: &mut egui::Ui, tab: &mut RepoTab, cx: &mut Ctx) {
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             let mut reload = false;
             if !is_image {
-                reload |= ui.toggle_value(&mut tab.ignore_whitespace, "Ignore whitespace").changed();
-                if ui.small_button(icon::PLUS).on_hover_text("More context").clicked() {
+                reload |= ui
+                    .toggle_value(&mut tab.ignore_whitespace, "Ignore whitespace")
+                    .changed();
+                if ui
+                    .small_button(icon::PLUS)
+                    .on_hover_text("More context")
+                    .clicked()
+                {
                     tab.diff_context = (tab.diff_context + 2).min(100);
                     reload = true;
                 }
                 ui.label(format!("{} lines", tab.diff_context));
-                if ui.small_button(icon::MINUS).on_hover_text("Less context").clicked() {
+                if ui
+                    .small_button(icon::MINUS)
+                    .on_hover_text("Less context")
+                    .clicked()
+                {
                     tab.diff_context = tab.diff_context.saturating_sub(2);
                     reload = true;
                 }
@@ -675,7 +988,9 @@ fn diff_panel(ui: &mut egui::Ui, tab: &mut RepoTab, cx: &mut Ctx) {
                 }
             } else {
                 if !conflicted && ui.button(format!("{} Discard", icon::TRASH)).clicked() {
-                    *cx.dialog = Some(Dialog::Discard { files: vec![file.clone()] });
+                    *cx.dialog = Some(Dialog::Discard {
+                        files: vec![file.clone()],
+                    });
                 }
                 if conflicted {
                     ui.menu_button("Resolve", |ui| conflict_actions(ui, tab, &file));
@@ -700,12 +1015,22 @@ fn diff_panel(ui: &mut egui::Ui, tab: &mut RepoTab, cx: &mut Ctx) {
         use crate::preview::Source;
         let path = file.path.clone();
         let (old, new) = if staged {
-            let old = (file.kind != ChangeKind::Added)
-                .then(|| Source::Commit("HEAD".into(), file.old_path.clone().unwrap_or_else(|| path.clone())));
-            (old, (file.kind != ChangeKind::Deleted).then(|| Source::Index(path.clone())))
+            let old = (file.kind != ChangeKind::Added).then(|| {
+                Source::Commit(
+                    "HEAD".into(),
+                    file.old_path.clone().unwrap_or_else(|| path.clone()),
+                )
+            });
+            (
+                old,
+                (file.kind != ChangeKind::Deleted).then(|| Source::Index(path.clone())),
+            )
         } else {
             let old = (file.kind != ChangeKind::Untracked).then(|| Source::Index(path.clone()));
-            (old, (file.kind != ChangeKind::Deleted).then(|| Source::Working(path.clone())))
+            (
+                old,
+                (file.kind != ChangeKind::Deleted).then(|| Source::Working(path.clone())),
+            )
         };
         let key = format!("work:{staged}:{path}");
         tab.request_images(&key, old, new);
@@ -737,7 +1062,10 @@ fn diff_panel(ui: &mut egui::Ui, tab: &mut RepoTab, cx: &mut Ctx) {
         ("work_diff", staged, &path),
         &diff,
         mode,
-        DiffState { selection: &mut tab.line_selection, last_clicked: &mut tab.last_clicked_line },
+        DiffState {
+            selection: &mut tab.line_selection,
+            last_clicked: &mut tab.last_clicked_line,
+        },
         cx.settings.diff_font_size,
     );
     match request {
@@ -748,12 +1076,22 @@ fn diff_panel(ui: &mut egui::Ui, tab: &mut RepoTab, cx: &mut Ctx) {
 }
 
 /// Shown instead of a diff when several files are selected.
-fn selection_summary(ui: &mut egui::Ui, tab: &mut RepoTab, cx: &mut Ctx, files: &[FileChange], staged: bool) {
+fn selection_summary(
+    ui: &mut egui::Ui,
+    tab: &mut RepoTab,
+    cx: &mut Ctx,
+    files: &[FileChange],
+    staged: bool,
+) {
     let p = theme::pal(ui);
     ui.vertical_centered(|ui| {
         ui.add_space((ui.available_height() * 0.25).max(20.0));
         ui.label(RichText::new(icon::FILES).size(40.0).color(p.muted));
-        ui.label(RichText::new(format!("{} files selected", files.len())).size(18.0).strong());
+        ui.label(
+            RichText::new(format!("{} files selected", files.len()))
+                .size(18.0)
+                .strong(),
+        );
         ui.add_space(8.0);
         ui.horizontal(|ui| {
             let w = if staged { 120.0 } else { 240.0 };
@@ -763,26 +1101,44 @@ fn selection_summary(ui: &mut egui::Ui, tab: &mut RepoTab, cx: &mut Ctx, files: 
                     tab.unstage(files.iter().map(|f| f.path.clone()).collect());
                 }
             } else {
-                let stageable: Vec<String> = files.iter().filter(|f| f.kind != ChangeKind::Conflicted).map(|f| f.path.clone()).collect();
-                if ui.add_enabled(!stageable.is_empty(), egui::Button::new(format!("{} Stage", icon::PLUS))).clicked() {
+                let stageable: Vec<String> = files
+                    .iter()
+                    .filter(|f| f.kind != ChangeKind::Conflicted)
+                    .map(|f| f.path.clone())
+                    .collect();
+                if ui
+                    .add_enabled(
+                        !stageable.is_empty(),
+                        egui::Button::new(format!("{} Stage", icon::PLUS)),
+                    )
+                    .clicked()
+                {
                     tab.stage(stageable);
                 }
                 if ui.button(format!("{} Discard…", icon::TRASH)).clicked() {
-                    *cx.dialog = Some(Dialog::Discard { files: files.to_vec() });
+                    *cx.dialog = Some(Dialog::Discard {
+                        files: files.to_vec(),
+                    });
                 }
             }
         });
         ui.add_space(12.0);
-        egui::ScrollArea::vertical().max_height(ui.available_height() - 20.0).show(ui, |ui| {
-            for f in files.iter().take(500) {
-                ui.horizontal(|ui| {
-                    ui.add_space(((ui.available_width() - 360.0) / 2.0).max(0.0));
-                    theme::change_badge(ui, f.kind);
-                    ui.label(RichText::new(&f.path).color(p.muted));
-                });
-            }
-        });
+        egui::ScrollArea::vertical()
+            .max_height(ui.available_height() - 20.0)
+            .show(ui, |ui| {
+                for f in files.iter().take(500) {
+                    ui.horizontal(|ui| {
+                        ui.add_space(((ui.available_width() - 360.0) / 2.0).max(0.0));
+                        theme::change_badge(ui, f.kind);
+                        ui.label(RichText::new(&f.path).color(p.muted));
+                    });
+                }
+            });
         ui.add_space(6.0);
-        ui.label(RichText::new("⌘/Ctrl-click to toggle, Shift-click to select a range").small().color(p.muted));
+        ui.label(
+            RichText::new("⌘/Ctrl-click to toggle, Shift-click to select a range")
+                .small()
+                .color(p.muted),
+        );
     });
 }

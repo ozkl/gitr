@@ -45,7 +45,13 @@ fn base_command(repo: &Path) -> Command {
         .env("GIT_TERMINAL_PROMPT", "0")
         .env("GIT_OPTIONAL_LOCKS", "0")
         .env("LC_ALL", "C")
-        .envs(EXTRA_ENV.get().into_iter().flatten().map(|(k, v)| (*k, v.as_str())))
+        .envs(
+            EXTRA_ENV
+                .get()
+                .into_iter()
+                .flatten()
+                .map(|(k, v)| (*k, v.as_str())),
+        )
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());

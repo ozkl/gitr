@@ -67,8 +67,16 @@ pub fn build(commits: &[Commit]) -> Vec<GraphRow> {
         for (i, lane) in lanes.iter().enumerate() {
             let Some(lane) = lane else { continue };
             let from = lane.source.unwrap_or(i as u16);
-            let to = if lane.target == commit.id { node_lane } else { i };
-            up.push(Edge { from, to: to as u16, color: lane.color });
+            let to = if lane.target == commit.id {
+                node_lane
+            } else {
+                i
+            };
+            up.push(Edge {
+                from,
+                to: to as u16,
+                color: lane.color,
+            });
         }
 
         // Lanes that converged into this commit are freed.
@@ -87,7 +95,11 @@ pub fn build(commits: &[Commit]) -> Vec<GraphRow> {
             .collect();
         for (pi, parent) in parents.iter().enumerate() {
             if pi == 0 {
-                lanes[node_lane] = Some(Lane { target: (*parent).clone(), color, source: None });
+                lanes[node_lane] = Some(Lane {
+                    target: (*parent).clone(),
+                    color,
+                    source: None,
+                });
                 continue;
             }
             // Every extra parent gets its own lane; duplicate lanes heading to the same
@@ -146,7 +158,14 @@ mod tests {
     fn linear_history_stays_in_one_lane() {
         let rows = build(&[c("c", &["b"]), c("b", &["a"]), c("a", &[])]);
         assert!(rows.iter().all(|r| r.lane == 0));
-        assert_eq!(rows[1].up, vec![Edge { from: 0, to: 0, color: rows[0].color }]);
+        assert_eq!(
+            rows[1].up,
+            vec![Edge {
+                from: 0,
+                to: 0,
+                color: rows[0].color
+            }]
+        );
     }
 
     #[test]
@@ -161,7 +180,11 @@ mod tests {
         assert_eq!(rows[0].lane, 0);
         assert_eq!(rows[1].lane, 1);
         // Edge from merge node (lane 0) into the second lane.
-        assert!(rows[1].up.contains(&Edge { from: 0, to: 1, color: rows[1].color }));
+        assert!(rows[1].up.contains(&Edge {
+            from: 0,
+            to: 1,
+            color: rows[1].color
+        }));
         assert_eq!(rows[2].lane, 0);
         assert_eq!(rows[3].lane, 0);
         // Both lanes converge into a0.

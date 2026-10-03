@@ -137,7 +137,9 @@ impl Refs {
     }
 
     pub fn head_upstream(&self) -> Option<&Branch> {
-        self.head_branch.as_deref().and_then(|b| self.local_branch(b))
+        self.head_branch
+            .as_deref()
+            .and_then(|b| self.local_branch(b))
     }
 
     pub fn remote_names(&self) -> Vec<String> {
@@ -248,7 +250,16 @@ pub fn load_log(repo: &Path, limit: usize) -> Result<Vec<Commit>, String> {
     // A fresh repository (or an orphan branch) has no HEAD commit; `git log` would fail on it.
     let has_head = cmd::run(repo, &["rev-parse", "-q", "--verify", "HEAD^{commit}"]).is_ok();
     if !has_head {
-        let any_ref = cmd::run(repo, &["for-each-ref", "--count=1", "refs/heads", "refs/remotes", "refs/tags"])?;
+        let any_ref = cmd::run(
+            repo,
+            &[
+                "for-each-ref",
+                "--count=1",
+                "refs/heads",
+                "refs/remotes",
+                "refs/tags",
+            ],
+        )?;
         if any_ref.trim().is_empty() {
             return Ok(Vec::new());
         }
@@ -258,7 +269,13 @@ pub fn load_log(repo: &Path, limit: usize) -> Result<Vec<Commit>, String> {
     if has_head {
         args.push("HEAD");
     }
-    args.extend(["--date-order", "-z", &limit, "--format=%H%x1f%P%x1f%an%x1f%ae%x1f%at%x1f%s", "--"]);
+    args.extend([
+        "--date-order",
+        "-z",
+        &limit,
+        "--format=%H%x1f%P%x1f%an%x1f%ae%x1f%at%x1f%s",
+        "--",
+    ]);
     let out = cmd::run(repo, &args)?;
     Ok(out
         .split('\0')
@@ -414,8 +431,12 @@ pub fn load_refs(repo: &Path) -> Result<Refs, String> {
     refs.stashes = load_stashes(repo);
     refs.submodules = load_submodules(repo);
     refs.state = repo_state(repo);
-    refs.sides = refs.state.map(|s| super::conflict::side_labels(repo, s, refs.head_branch.as_deref()));
-    refs.identity = cmd::run(repo, &["var", "GIT_AUTHOR_IDENT"]).ok().map(|s| strip_ident_date(s.trim()));
+    refs.sides = refs
+        .state
+        .map(|s| super::conflict::side_labels(repo, s, refs.head_branch.as_deref()));
+    refs.identity = cmd::run(repo, &["var", "GIT_AUTHOR_IDENT"])
+        .ok()
+        .map(|s| strip_ident_date(s.trim()));
     Ok(refs)
 }
 
@@ -423,7 +444,9 @@ fn split_remote<'a>(name: &'a str, remotes: &[(String, String)]) -> Option<(&'a 
     // Prefer the longest matching remote name (remote names may contain '/').
     remotes
         .iter()
-        .filter(|(r, _)| name.len() > r.len() && name.starts_with(r.as_str()) && name.as_bytes()[r.len()] == b'/')
+        .filter(|(r, _)| {
+            name.len() > r.len() && name.starts_with(r.as_str()) && name.as_bytes()[r.len()] == b'/'
+        })
         .max_by_key(|(r, _)| r.len())
         .map(|(r, _)| (&name[..r.len()], &name[r.len() + 1..]))
         .or_else(|| name.split_once('/'))
@@ -453,7 +476,10 @@ fn remote_urls(repo: &Path) -> Vec<(String, String)> {
 }
 
 fn load_stashes(repo: &Path) -> Vec<Stash> {
-    let Ok(out) = cmd::run(repo, &["stash", "list", "-z", "--format=%gd%x1f%H%x1f%gs%x1f%ct"]) else {
+    let Ok(out) = cmd::run(
+        repo,
+        &["stash", "list", "-z", "--format=%gd%x1f%H%x1f%gs%x1f%ct"],
+    ) else {
         return Vec::new();
     };
     out.split('\0')
@@ -513,7 +539,13 @@ fn repo_state(repo: &Path) -> Option<RepoState> {
 pub fn load_status(repo: &Path) -> Result<Status, String> {
     let out = cmd::run(
         repo,
-        &["status", "--porcelain=v2", "-z", "--untracked-files=all", "--ignore-submodules=dirty"],
+        &[
+            "status",
+            "--porcelain=v2",
+            "-z",
+            "--untracked-files=all",
+            "--ignore-submodules=dirty",
+        ],
     )?;
     let mut status = Status::default();
     let mut fields = out.split('\0');
@@ -524,7 +556,9 @@ pub fn load_status(repo: &Path) -> Result<Status, String> {
         let kind = entry.as_bytes()[0];
         match kind {
             b'1' | b'2' => {
-                let parts: Vec<&str> = entry.splitn(if kind == b'1' { 9 } else { 10 }, ' ').collect();
+                let parts: Vec<&str> = entry
+                    .splitn(if kind == b'1' { 9 } else { 10 }, ' ')
+                    .collect();
                 let xy: Vec<char> = parts[1].chars().collect();
                 let path = parts.last().copied().unwrap_or_default().to_owned();
                 let old_path = if kind == b'2' {
@@ -550,10 +584,17 @@ pub fn load_status(repo: &Path) -> Result<Status, String> {
             b'u' => {
                 let parts: Vec<&str> = entry.splitn(11, ' ').collect();
                 let path = parts.last().copied().unwrap_or_default().to_owned();
-                if let Some(kind) = parts.get(1).and_then(|xy| super::conflict::ConflictKind::from_xy(xy)) {
+                if let Some(kind) = parts
+                    .get(1)
+                    .and_then(|xy| super::conflict::ConflictKind::from_xy(xy))
+                {
                     status.conflicts.insert(path.clone(), kind);
                 }
-                status.unstaged.push(FileChange { path, old_path: None, kind: ChangeKind::Conflicted });
+                status.unstaged.push(FileChange {
+                    path,
+                    old_path: None,
+                    kind: ChangeKind::Conflicted,
+                });
             }
             b'?' => status.unstaged.push(FileChange {
                 path: entry[2..].to_owned(),
@@ -563,10 +604,17 @@ pub fn load_status(repo: &Path) -> Result<Status, String> {
             _ => {}
         }
     }
-    let sort = |v: &mut Vec<FileChange>| v.sort_by(|a, b| a.path.to_lowercase().cmp(&b.path.to_lowercase()));
+    let sort = |v: &mut Vec<FileChange>| {
+        v.sort_by(|a, b| a.path.to_lowercase().cmp(&b.path.to_lowercase()))
+    };
     sort(&mut status.staged);
     sort(&mut status.unstaged);
-    let mut paths: Vec<String> = status.staged.iter().chain(&status.unstaged).map(|f| f.path.clone()).collect();
+    let mut paths: Vec<String> = status
+        .staged
+        .iter()
+        .chain(&status.unstaged)
+        .map(|f| f.path.clone())
+        .collect();
     paths.sort_unstable();
     paths.dedup();
     status.lfs = super::lfs::lfs_paths(repo, None, &paths);
@@ -625,15 +673,38 @@ pub fn load_commit_details(repo: &Path, id: &str) -> Result<CommitDetails, Strin
         committer_email: f[6].to_owned(),
         commit_time: f[7].parse().unwrap_or(0),
         message: f[8].trim_end().to_owned(),
-        lfs: super::lfs::lfs_paths(repo, Some(id), &files.iter().map(|f| f.path.clone()).collect::<Vec<_>>()),
+        lfs: super::lfs::lfs_paths(
+            repo,
+            Some(id),
+            &files.iter().map(|f| f.path.clone()).collect::<Vec<_>>(),
+        ),
         files,
     })
 }
 
-pub fn commit_files(repo: &Path, id: &str, parent: Option<&str>) -> Result<Vec<FileChange>, String> {
+pub fn commit_files(
+    repo: &Path,
+    id: &str,
+    parent: Option<&str>,
+) -> Result<Vec<FileChange>, String> {
     let out = match parent {
-        Some(p) => cmd::run(repo, &["diff-tree", "-r", "-z", "-M", "--name-status", p, id])?,
-        None => cmd::run(repo, &["diff-tree", "-r", "-z", "-M", "--name-status", "--root", "--no-commit-id", id])?,
+        Some(p) => cmd::run(
+            repo,
+            &["diff-tree", "-r", "-z", "-M", "--name-status", p, id],
+        )?,
+        None => cmd::run(
+            repo,
+            &[
+                "diff-tree",
+                "-r",
+                "-z",
+                "-M",
+                "--name-status",
+                "--root",
+                "--no-commit-id",
+                id,
+            ],
+        )?,
     };
     Ok(parse_name_status(&out))
 }
@@ -646,7 +717,12 @@ pub struct HistoryEntry {
 }
 
 /// Commits reachable from `rev` that changed `path`, newest first, following renames.
-pub fn file_history(repo: &Path, rev: &str, path: &str, limit: usize) -> Result<Vec<HistoryEntry>, String> {
+pub fn file_history(
+    repo: &Path,
+    rev: &str,
+    path: &str,
+    limit: usize,
+) -> Result<Vec<HistoryEntry>, String> {
     let limit = format!("--max-count={limit}");
     let out = cmd::run(
         repo,
@@ -673,7 +749,8 @@ fn parse_file_history(out: &str, path: &str) -> Vec<HistoryEntry> {
     for record in out.split('\x1e').filter(|r| !r.trim().is_empty()) {
         let (header, changes) = record.split_once('\0').unwrap_or((record, ""));
         let mut f = header.split(FS);
-        let (Some(id), Some(parents), Some(author), Some(email), Some(time)) = (f.next(), f.next(), f.next(), f.next(), f.next())
+        let (Some(id), Some(parents), Some(author), Some(email), Some(time)) =
+            (f.next(), f.next(), f.next(), f.next(), f.next())
         else {
             continue;
         };
@@ -690,7 +767,11 @@ fn parse_file_history(out: &str, path: &str) -> Vec<HistoryEntry> {
         let file = parse_name_status(changes)
             .into_iter()
             .next()
-            .unwrap_or(FileChange { path: current.clone(), old_path: None, kind: ChangeKind::Modified });
+            .unwrap_or(FileChange {
+                path: current.clone(),
+                old_path: None,
+                kind: ChangeKind::Modified,
+            });
         current = file.old_path.clone().unwrap_or_else(|| file.path.clone());
         entries.push(HistoryEntry { commit, file });
     }
@@ -700,7 +781,11 @@ fn parse_file_history(out: &str, path: &str) -> Vec<HistoryEntry> {
 /// All file paths in a commit, and which of them are tracked with Git LFS.
 pub fn list_tree(repo: &Path, id: &str) -> Result<(Vec<String>, HashSet<String>), String> {
     let out = cmd::run(repo, &["ls-tree", "-r", "-z", "--name-only", id])?;
-    let paths: Vec<String> = out.split('\0').filter(|s| !s.is_empty()).map(str::to_owned).collect();
+    let paths: Vec<String> = out
+        .split('\0')
+        .filter(|s| !s.is_empty())
+        .map(str::to_owned)
+        .collect();
     let lfs = super::lfs::lfs_paths(repo, Some(id), &paths);
     Ok((paths, lfs))
 }
@@ -787,7 +872,10 @@ pub fn load_repo_config(repo: &Path) -> (RepoConfig, InheritedConfig) {
         pull: PullMode::from_config(local("pull.rebase").as_deref(), local("pull.ff").as_deref()),
         prune: local("fetch.prune").map(|v| v == "true"),
     };
-    let pull = match PullMode::from_config(inherited(repo, "pull.rebase").as_deref(), inherited(repo, "pull.ff").as_deref()) {
+    let pull = match PullMode::from_config(
+        inherited(repo, "pull.rebase").as_deref(),
+        inherited(repo, "pull.ff").as_deref(),
+    ) {
         PullMode::Inherit => PullMode::Merge,
         m => m,
     };
@@ -809,10 +897,17 @@ pub fn save_repo_config(repo: &Path, old: &RepoConfig, new: &RepoConfig) -> Resu
         Ok::<(), String>(())
     };
     let mut changed = Vec::new();
-    for (key, o, n) in [("user.name", &old.user_name, &new.user_name), ("user.email", &old.user_email, &new.user_email)] {
+    for (key, o, n) in [
+        ("user.name", &old.user_name, &new.user_name),
+        ("user.email", &old.user_email, &new.user_email),
+    ] {
         let n = n.trim();
         if o.trim() != n {
-            if n.is_empty() { unset(key)? } else { set(key, n)? }
+            if n.is_empty() {
+                unset(key)?
+            } else {
+                set(key, n)?
+            }
             changed.push(key);
         }
     }
@@ -844,7 +939,11 @@ pub fn save_repo_config(repo: &Path, old: &RepoConfig, new: &RepoConfig) -> Resu
         }
         changed.push("fetch.prune");
     }
-    Ok(if changed.is_empty() { "No changes".into() } else { format!("Updated {}", changed.join(", ")) })
+    Ok(if changed.is_empty() {
+        "No changes".into()
+    } else {
+        format!("Updated {}", changed.join(", "))
+    })
 }
 
 pub fn config_value(repo: &Path, key: &str) -> Option<String> {
@@ -856,7 +955,9 @@ pub fn config_value(repo: &Path, key: &str) -> Option<String> {
 
 /// Last commit message of HEAD (for amend).
 pub fn head_message(repo: &Path) -> Option<String> {
-    cmd::run(repo, &["log", "-1", "--format=%B"]).ok().map(|s| s.trim_end().to_owned())
+    cmd::run(repo, &["log", "-1", "--format=%B"])
+        .ok()
+        .map(|s| s.trim_end().to_owned())
 }
 
 /// Compares strings treating digit runs as numbers (v1.10 > v1.9).
@@ -965,7 +1066,10 @@ mod tests {
         };
         save_repo_config(&dir, &initial, &new).unwrap();
         assert_eq!(load_repo_config(&dir).0, new);
-        assert_eq!(config_at(&dir, "--local", "pull.ff").as_deref(), Some("only"));
+        assert_eq!(
+            config_at(&dir, "--local", "pull.ff").as_deref(),
+            Some("only")
+        );
 
         // Clearing returns to inherited values.
         save_repo_config(&dir, &new, &initial).unwrap();
@@ -975,7 +1079,10 @@ mod tests {
 
     #[test]
     fn strips_ident_timestamp() {
-        assert_eq!(strip_ident_date("Ada L <ada@x.com> 1700000000 +0300"), "Ada L <ada@x.com>");
+        assert_eq!(
+            strip_ident_date("Ada L <ada@x.com> 1700000000 +0300"),
+            "Ada L <ada@x.com>"
+        );
     }
 
     #[test]
@@ -1005,7 +1112,10 @@ mod tests {
         assert_eq!(h[0].file.kind, ChangeKind::Modified);
         assert_eq!(h[1].file.kind, ChangeKind::Renamed);
         assert_eq!(h[1].file.old_path.as_deref(), Some("old.txt"));
-        assert_eq!((h[2].file.kind, h[2].file.path.as_str()), (ChangeKind::Added, "old.txt"));
+        assert_eq!(
+            (h[2].file.kind, h[2].file.path.as_str()),
+            (ChangeKind::Added, "old.txt")
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

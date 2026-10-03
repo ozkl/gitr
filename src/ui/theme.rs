@@ -119,27 +119,57 @@ pub fn mono(size: f32) -> FontId {
 pub fn apply_style(ctx: &egui::Context) {
     for dark in [true, false] {
         let p = palette(dark);
-        let mut visuals = if dark { Visuals::dark() } else { Visuals::light() };
+        let mut visuals = if dark {
+            Visuals::dark()
+        } else {
+            Visuals::light()
+        };
         visuals.panel_fill = p.panel;
-        visuals.window_fill = if dark { Color32::from_rgb(0x25, 0x26, 0x29) } else { Color32::WHITE };
-        visuals.extreme_bg_color = if dark { Color32::from_rgb(0x15, 0x16, 0x18) } else { Color32::WHITE };
-        visuals.faint_bg_color = if dark { Color32::from_rgb(0x21, 0x22, 0x25) } else { Color32::from_rgb(0xf4, 0xf5, 0xf7) };
+        visuals.window_fill = if dark {
+            Color32::from_rgb(0x25, 0x26, 0x29)
+        } else {
+            Color32::WHITE
+        };
+        visuals.extreme_bg_color = if dark {
+            Color32::from_rgb(0x15, 0x16, 0x18)
+        } else {
+            Color32::WHITE
+        };
+        visuals.faint_bg_color = if dark {
+            Color32::from_rgb(0x21, 0x22, 0x25)
+        } else {
+            Color32::from_rgb(0xf4, 0xf5, 0xf7)
+        };
         visuals.selection.bg_fill = p.selection;
         visuals.selection.stroke.color = p.selection_text;
         visuals.hyperlink_color = p.renamed;
         visuals.widgets.noninteractive.bg_stroke.color = p.border;
-        let theme = if dark { egui::Theme::Dark } else { egui::Theme::Light };
+        let theme = if dark {
+            egui::Theme::Dark
+        } else {
+            egui::Theme::Light
+        };
         ctx.set_visuals_of(theme, visuals);
         ctx.style_mut_of(theme, |style| {
             style.spacing.item_spacing = egui::vec2(6.0, 4.0);
             style.spacing.button_padding = egui::vec2(8.0, 3.0);
             style.spacing.interact_size.y = 22.0;
             style.spacing.scroll.floating = true;
-            style.text_styles.insert(egui::TextStyle::Body, FontId::proportional(13.5));
-            style.text_styles.insert(egui::TextStyle::Button, FontId::proportional(13.5));
-            style.text_styles.insert(egui::TextStyle::Small, FontId::proportional(11.5));
-            style.text_styles.insert(egui::TextStyle::Monospace, mono(12.5));
-            style.text_styles.insert(egui::TextStyle::Heading, FontId::proportional(18.0));
+            style
+                .text_styles
+                .insert(egui::TextStyle::Body, FontId::proportional(13.5));
+            style
+                .text_styles
+                .insert(egui::TextStyle::Button, FontId::proportional(13.5));
+            style
+                .text_styles
+                .insert(egui::TextStyle::Small, FontId::proportional(11.5));
+            style
+                .text_styles
+                .insert(egui::TextStyle::Monospace, mono(12.5));
+            style
+                .text_styles
+                .insert(egui::TextStyle::Heading, FontId::proportional(18.0));
         });
     }
 }
@@ -238,11 +268,23 @@ pub fn split_path(path: &str) -> (&str, &str) {
 
 /// Small "LFS" pill marking files tracked with Git LFS.
 pub fn lfs_badge(ui: &mut egui::Ui, selected: bool) -> egui::Response {
-    let color = if selected { Color32::WHITE } else { Color32::from_rgb(0x2d, 0xd4, 0xbf) };
-    let galley = ui.painter().layout_no_wrap("LFS".to_owned(), FontId::proportional(9.5), color);
+    let color = if selected {
+        Color32::WHITE
+    } else {
+        Color32::from_rgb(0x2d, 0xd4, 0xbf)
+    };
+    let galley = ui
+        .painter()
+        .layout_no_wrap("LFS".to_owned(), FontId::proportional(9.5), color);
     let size = egui::vec2(galley.size().x + 8.0, 14.0);
     let (rect, resp) = ui.allocate_exact_size(size, egui::Sense::hover());
-    ui.painter().rect_stroke(rect, 3.0, egui::Stroke::new(1.0, color), egui::StrokeKind::Inside);
-    ui.painter().galley(rect.center() - galley.size() / 2.0, galley, color);
+    ui.painter().rect_stroke(
+        rect,
+        3.0,
+        egui::Stroke::new(1.0, color),
+        egui::StrokeKind::Inside,
+    );
+    ui.painter()
+        .galley(rect.center() - galley.size() / 2.0, galley, color);
     resp.on_hover_text("Tracked with Git LFS")
 }

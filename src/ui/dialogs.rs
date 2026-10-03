@@ -5,8 +5,8 @@ use std::path::PathBuf;
 use egui::{Key, RichText};
 
 use crate::app::Settings;
-use crate::git::{FileChange, InheritedConfig, PullMode, RepoConfig};
 use crate::git::diff::Selection;
+use crate::git::{FileChange, InheritedConfig, PullMode, RepoConfig};
 use crate::repo::{PatchAction, RepoTab};
 use crate::ui::theme;
 
@@ -18,23 +18,85 @@ pub enum ResetMode {
 }
 
 pub enum Dialog {
-    CreateBranch { start: String, start_label: String, name: String, checkout: bool },
-    RenameBranch { old: String, name: String },
-    CreateTag { target: String, name: String, message: String, push: bool },
-    Pull { remote: String, branch: String, rebase: bool, autostash: bool },
-    Push { branch: String, remote: String, remote_branch: String, set_upstream: bool, force: bool, tags: bool },
-    Stash { message: String, untracked: bool, keep_index: bool },
-    Reset { target: String, mode: ResetMode },
-    Merge { source: String, no_ff: bool, squash: bool },
-    AddRemote { name: String, url: String },
-    EditRemote { old_name: String, old_url: String, name: String, url: String },
-    Discard { files: Vec<FileChange> },
+    CreateBranch {
+        start: String,
+        start_label: String,
+        name: String,
+        checkout: bool,
+    },
+    RenameBranch {
+        old: String,
+        name: String,
+    },
+    CreateTag {
+        target: String,
+        name: String,
+        message: String,
+        push: bool,
+    },
+    Pull {
+        remote: String,
+        branch: String,
+        rebase: bool,
+        autostash: bool,
+    },
+    Push {
+        branch: String,
+        remote: String,
+        remote_branch: String,
+        set_upstream: bool,
+        force: bool,
+        tags: bool,
+    },
+    Stash {
+        message: String,
+        untracked: bool,
+        keep_index: bool,
+    },
+    Reset {
+        target: String,
+        mode: ResetMode,
+    },
+    Merge {
+        source: String,
+        no_ff: bool,
+        squash: bool,
+    },
+    AddRemote {
+        name: String,
+        url: String,
+    },
+    EditRemote {
+        old_name: String,
+        old_url: String,
+        name: String,
+        url: String,
+    },
+    Discard {
+        files: Vec<FileChange>,
+    },
     DiscardPatch(Selection),
     /// Runs `commands` in sequence after confirmation.
-    Confirm { title: String, text: String, button: String, destructive: bool, label: String, commands: Vec<Vec<String>> },
-    Clone { url: String, parent: String, name: String },
+    Confirm {
+        title: String,
+        text: String,
+        button: String,
+        destructive: bool,
+        label: String,
+        commands: Vec<Vec<String>>,
+    },
+    Clone {
+        url: String,
+        parent: String,
+        name: String,
+    },
     Settings(Settings),
-    RepoSettings { repo: String, original: RepoConfig, edit: RepoConfig, inherited: InheritedConfig },
+    RepoSettings {
+        repo: String,
+        original: RepoConfig,
+        edit: RepoConfig,
+        inherited: InheritedConfig,
+    },
 }
 
 pub enum AppAction {
@@ -74,7 +136,12 @@ impl Dialog {
 
     pub fn repo_settings(tab: &RepoTab) -> Dialog {
         let (config, inherited) = crate::git::load_repo_config(&tab.path);
-        Dialog::RepoSettings { repo: tab.name.clone(), original: config.clone(), edit: config, inherited }
+        Dialog::RepoSettings {
+            repo: tab.name.clone(),
+            original: config.clone(),
+            edit: config,
+            inherited,
+        }
     }
 
     pub fn pull(tab: &RepoTab) -> Dialog {
@@ -83,20 +150,41 @@ impl Dialog {
             .and_then(|b| b.upstream.as_deref())
             .and_then(|u| u.split_once('/'))
             .map(|(r, b)| (r.to_owned(), b.to_owned()))
-            .unwrap_or_else(|| (tab.default_remote().unwrap_or_default(), tab.refs.head_branch.clone().unwrap_or_default()));
-        let rebase = crate::git::config_value(&tab.path, "pull.rebase").is_some_and(|v| v == "true");
-        Dialog::Pull { remote, branch, rebase, autostash: true }
+            .unwrap_or_else(|| {
+                (
+                    tab.default_remote().unwrap_or_default(),
+                    tab.refs.head_branch.clone().unwrap_or_default(),
+                )
+            });
+        let rebase =
+            crate::git::config_value(&tab.path, "pull.rebase").is_some_and(|v| v == "true");
+        Dialog::Pull {
+            remote,
+            branch,
+            rebase,
+            autostash: true,
+        }
     }
 
     pub fn push(tab: &RepoTab) -> Dialog {
         let branch = tab.refs.head_branch.clone().unwrap_or_default();
-        let upstream = tab.refs.local_branch(&branch).and_then(|b| b.upstream.clone());
+        let upstream = tab
+            .refs
+            .local_branch(&branch)
+            .and_then(|b| b.upstream.clone());
         let (remote, remote_branch) = upstream
             .as_deref()
             .and_then(|u| u.split_once('/'))
             .map(|(r, b)| (r.to_owned(), b.to_owned()))
             .unwrap_or_else(|| (tab.default_remote().unwrap_or_default(), branch.clone()));
-        Dialog::Push { branch, remote, remote_branch, set_upstream: upstream.is_none(), force: false, tags: false }
+        Dialog::Push {
+            branch,
+            remote,
+            remote_branch,
+            set_upstream: upstream.is_none(),
+            force: false,
+            tags: false,
+        }
     }
 }
 
@@ -108,7 +196,11 @@ fn buttons(ui: &mut egui::Ui, confirm: &str, enabled: bool, destructive: bool) -
         let mut text = RichText::new(confirm);
         let mut button = egui::Button::new(text.clone());
         if enabled {
-            let fill = if destructive { theme::pal(ui).removed } else { theme::pal(ui).selection };
+            let fill = if destructive {
+                theme::pal(ui).removed
+            } else {
+                theme::pal(ui).selection
+            };
             text = text.color(egui::Color32::WHITE);
             button = egui::Button::new(text).fill(fill);
         }
@@ -120,8 +212,15 @@ fn buttons(ui: &mut egui::Ui, confirm: &str, enabled: bool, destructive: bool) -
         }
     });
     // Plain Enter confirms unless a multi-line field is being edited; Cmd/Ctrl+Enter always does.
-    let multiline_focused = ui.ctx().data(|d| d.get_temp::<bool>(egui::Id::new(MULTILINE_FOCUS))).unwrap_or(false);
-    let enter = ui.input(|i| i.key_pressed(Key::Enter) && !i.modifiers.shift && (i.modifiers.command || !multiline_focused));
+    let multiline_focused = ui
+        .ctx()
+        .data(|d| d.get_temp::<bool>(egui::Id::new(MULTILINE_FOCUS)))
+        .unwrap_or(false);
+    let enter = ui.input(|i| {
+        i.key_pressed(Key::Enter)
+            && !i.modifiers.shift
+            && (i.modifiers.command || !multiline_focused)
+    });
     (ok || (enabled && enter), cancel)
 }
 
@@ -137,11 +236,18 @@ fn remote_combo(ui: &mut egui::Ui, id: &str, remote: &mut String, remotes: &[Str
 }
 
 fn grid(ui: &mut egui::Ui, id: &str, add: impl FnOnce(&mut egui::Ui)) {
-    egui::Grid::new(id).num_columns(2).spacing([12.0, 8.0]).show(ui, add);
+    egui::Grid::new(id)
+        .num_columns(2)
+        .spacing([12.0, 8.0])
+        .show(ui, add);
 }
 
 fn text_field(ui: &mut egui::Ui, value: &mut String, hint: &str, focus: bool) {
-    let r = ui.add(egui::TextEdit::singleline(value).hint_text(hint).desired_width(260.0));
+    let r = ui.add(
+        egui::TextEdit::singleline(value)
+            .hint_text(hint)
+            .desired_width(260.0),
+    );
     if focus && !r.has_focus() && ui.ctx().memory(|m| m.focused().is_none()) {
         r.request_focus();
     }
@@ -162,11 +268,19 @@ pub fn show(ctx: &egui::Context, dialog: &mut Dialog, tab: Option<&mut RepoTab>)
 }
 
 fn body(ui: &mut egui::Ui, dialog: &mut Dialog, tab: Option<&mut RepoTab>) -> Outcome {
-    let remotes = tab.as_ref().map(|t| t.refs.remote_names()).unwrap_or_default();
+    let remotes = tab
+        .as_ref()
+        .map(|t| t.refs.remote_names())
+        .unwrap_or_default();
     let close;
     let mut app = None;
     match dialog {
-        Dialog::CreateBranch { start, start_label, name, checkout } => {
+        Dialog::CreateBranch {
+            start,
+            start_label,
+            name,
+            checkout,
+        } => {
             ui.heading("Create Branch");
             ui.add_space(6.0);
             grid(ui, "cb", |ui| {
@@ -210,12 +324,20 @@ fn body(ui: &mut egui::Ui, dialog: &mut Dialog, tab: Option<&mut RepoTab>) -> Ou
             let (ok, cancel) = buttons(ui, "Rename", valid, false);
             if ok {
                 if let Some(tab) = tab {
-                    tab.git(format!("Rename branch {old}"), vec![s("branch"), s("-m"), old.clone(), name.trim().to_owned()]);
+                    tab.git(
+                        format!("Rename branch {old}"),
+                        vec![s("branch"), s("-m"), old.clone(), name.trim().to_owned()],
+                    );
                 }
             }
             close = ok || cancel;
         }
-        Dialog::CreateTag { target, name, message, push } => {
+        Dialog::CreateTag {
+            target,
+            name,
+            message,
+            push,
+        } => {
             ui.heading("Create Tag");
             ui.add_space(6.0);
             grid(ui, "ct", |ui| {
@@ -226,12 +348,21 @@ fn body(ui: &mut egui::Ui, dialog: &mut Dialog, tab: Option<&mut RepoTab>) -> Ou
                 text_field(ui, name, "v1.0.0", true);
                 ui.end_row();
                 ui.label("Message:");
-                let r = ui.add(egui::TextEdit::multiline(message).hint_text("Optional (creates an annotated tag)").desired_rows(3).desired_width(260.0));
+                let r = ui.add(
+                    egui::TextEdit::multiline(message)
+                        .hint_text("Optional (creates an annotated tag)")
+                        .desired_rows(3)
+                        .desired_width(260.0),
+                );
                 let focused = r.has_focus();
-                ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new(MULTILINE_FOCUS), focused));
+                ui.ctx()
+                    .data_mut(|d| d.insert_temp(egui::Id::new(MULTILINE_FOCUS), focused));
                 ui.end_row();
                 ui.label("");
-                ui.add_enabled(!remotes.is_empty(), egui::Checkbox::new(push, "Push tag to remote"));
+                ui.add_enabled(
+                    !remotes.is_empty(),
+                    egui::Checkbox::new(push, "Push tag to remote"),
+                );
                 ui.end_row();
             });
             let valid = !name.trim().is_empty() && !name.contains(' ');
@@ -242,7 +373,14 @@ fn body(ui: &mut egui::Ui, dialog: &mut Dialog, tab: Option<&mut RepoTab>) -> Ou
                     let mut cmds = vec![if message.trim().is_empty() {
                         vec![s("tag"), name.clone(), target.clone()]
                     } else {
-                        vec![s("tag"), s("-a"), name.clone(), s("-m"), message.trim().to_owned(), target.clone()]
+                        vec![
+                            s("tag"),
+                            s("-a"),
+                            name.clone(),
+                            s("-m"),
+                            message.trim().to_owned(),
+                            target.clone(),
+                        ]
                     }];
                     if *push {
                         if let Some(remote) = tab.default_remote() {
@@ -254,7 +392,12 @@ fn body(ui: &mut egui::Ui, dialog: &mut Dialog, tab: Option<&mut RepoTab>) -> Ou
             }
             close = ok || cancel;
         }
-        Dialog::Pull { remote, branch, rebase, autostash } => {
+        Dialog::Pull {
+            remote,
+            branch,
+            rebase,
+            autostash,
+        } => {
             ui.heading("Pull");
             ui.add_space(6.0);
             grid(ui, "pull", |ui| {
@@ -274,7 +417,14 @@ fn body(ui: &mut egui::Ui, dialog: &mut Dialog, tab: Option<&mut RepoTab>) -> Ou
             let (ok, cancel) = buttons(ui, "Pull", !remote.is_empty(), false);
             if ok {
                 if let Some(tab) = tab {
-                    let mut args = vec![s("pull"), if *rebase { s("--rebase") } else { s("--no-rebase") }];
+                    let mut args = vec![
+                        s("pull"),
+                        if *rebase {
+                            s("--rebase")
+                        } else {
+                            s("--no-rebase")
+                        },
+                    ];
                     if *autostash {
                         args.push(s("--autostash"));
                     }
@@ -287,7 +437,14 @@ fn body(ui: &mut egui::Ui, dialog: &mut Dialog, tab: Option<&mut RepoTab>) -> Ou
             }
             close = ok || cancel;
         }
-        Dialog::Push { branch, remote, remote_branch, set_upstream, force, tags } => {
+        Dialog::Push {
+            branch,
+            remote,
+            remote_branch,
+            set_upstream,
+            force,
+            tags,
+        } => {
             ui.heading("Push");
             ui.add_space(6.0);
             grid(ui, "push", |ui| {
@@ -309,10 +466,18 @@ fn body(ui: &mut egui::Ui, dialog: &mut Dialog, tab: Option<&mut RepoTab>) -> Ou
                 ui.checkbox(tags, "Push all tags");
                 ui.end_row();
                 ui.label("");
-                ui.checkbox(force, RichText::new("Force push (with lease)").color(if *force { theme::pal(ui).removed } else { ui.visuals().text_color() }));
+                ui.checkbox(
+                    force,
+                    RichText::new("Force push (with lease)").color(if *force {
+                        theme::pal(ui).removed
+                    } else {
+                        ui.visuals().text_color()
+                    }),
+                );
                 ui.end_row();
             });
-            let valid = !branch.is_empty() && !remote.is_empty() && !remote_branch.trim().is_empty();
+            let valid =
+                !branch.is_empty() && !remote.is_empty() && !remote_branch.trim().is_empty();
             let (ok, cancel) = buttons(ui, "Push", valid, *force);
             if ok {
                 if let Some(tab) = tab {
@@ -327,13 +492,20 @@ fn body(ui: &mut egui::Ui, dialog: &mut Dialog, tab: Option<&mut RepoTab>) -> Ou
                         args.push(s("--tags"));
                     }
                     args.push(remote.clone());
-                    args.push(format!("refs/heads/{branch}:refs/heads/{}", remote_branch.trim()));
+                    args.push(format!(
+                        "refs/heads/{branch}:refs/heads/{}",
+                        remote_branch.trim()
+                    ));
                     tab.git("Push", args);
                 }
             }
             close = ok || cancel;
         }
-        Dialog::Stash { message, untracked, keep_index } => {
+        Dialog::Stash {
+            message,
+            untracked,
+            keep_index,
+        } => {
             ui.heading("Stash Changes");
             ui.add_space(6.0);
             grid(ui, "stash", |ui| {
@@ -367,15 +539,25 @@ fn body(ui: &mut egui::Ui, dialog: &mut Dialog, tab: Option<&mut RepoTab>) -> Ou
             close = ok || cancel;
         }
         Dialog::Reset { target, mode } => {
-            let branch = tab.as_ref().and_then(|t| t.refs.head_branch.clone()).unwrap_or_else(|| "HEAD".into());
+            let branch = tab
+                .as_ref()
+                .and_then(|t| t.refs.head_branch.clone())
+                .unwrap_or_else(|| "HEAD".into());
             ui.heading(format!("Reset '{branch}' to {}", crate::git::short(target)));
             ui.add_space(6.0);
             ui.radio_value(mode, ResetMode::Soft, "Soft — keep all changes staged");
-            ui.radio_value(mode, ResetMode::Mixed, "Mixed — keep changes in the working tree, unstaged");
+            ui.radio_value(
+                mode,
+                ResetMode::Mixed,
+                "Mixed — keep changes in the working tree, unstaged",
+            );
             ui.radio_value(mode, ResetMode::Hard, "Hard — discard all local changes");
             if *mode == ResetMode::Hard {
                 ui.add_space(4.0);
-                ui.label(RichText::new("All uncommitted changes will be lost.").color(theme::pal(ui).removed));
+                ui.label(
+                    RichText::new("All uncommitted changes will be lost.")
+                        .color(theme::pal(ui).removed),
+                );
             }
             let (ok, cancel) = buttons(ui, "Reset", true, *mode == ResetMode::Hard);
             if ok {
@@ -390,13 +572,23 @@ fn body(ui: &mut egui::Ui, dialog: &mut Dialog, tab: Option<&mut RepoTab>) -> Ou
             }
             close = ok || cancel;
         }
-        Dialog::Merge { source, no_ff, squash } => {
-            let branch = tab.as_ref().and_then(|t| t.refs.head_branch.clone()).unwrap_or_else(|| "HEAD".into());
+        Dialog::Merge {
+            source,
+            no_ff,
+            squash,
+        } => {
+            let branch = tab
+                .as_ref()
+                .and_then(|t| t.refs.head_branch.clone())
+                .unwrap_or_else(|| "HEAD".into());
             ui.heading("Merge");
             ui.add_space(6.0);
             ui.label(format!("Merge '{source}' into '{branch}'"));
             ui.add_space(4.0);
-            ui.checkbox(no_ff, "Create a merge commit even if fast-forward is possible (--no-ff)");
+            ui.checkbox(
+                no_ff,
+                "Create a merge commit even if fast-forward is possible (--no-ff)",
+            );
             ui.checkbox(squash, "Squash commits (--squash)");
             let (ok, cancel) = buttons(ui, "Merge", true, false);
             if ok {
@@ -434,13 +626,21 @@ fn body(ui: &mut egui::Ui, dialog: &mut Dialog, tab: Option<&mut RepoTab>) -> Ou
                     let n = name.trim().to_owned();
                     tab.git_seq(
                         format!("Add remote {n}"),
-                        vec![vec![s("remote"), s("add"), n.clone(), url.trim().to_owned()], vec![s("fetch"), n]],
+                        vec![
+                            vec![s("remote"), s("add"), n.clone(), url.trim().to_owned()],
+                            vec![s("fetch"), n],
+                        ],
                     );
                 }
             }
             close = ok || cancel;
         }
-        Dialog::EditRemote { old_name, old_url, name, url } => {
+        Dialog::EditRemote {
+            old_name,
+            old_url,
+            name,
+            url,
+        } => {
             ui.heading("Edit Remote");
             ui.add_space(6.0);
             grid(ui, "er", |ui| {
@@ -499,7 +699,14 @@ fn body(ui: &mut egui::Ui, dialog: &mut Dialog, tab: Option<&mut RepoTab>) -> Ou
             }
             close = ok || cancel;
         }
-        Dialog::Confirm { title, text, button, destructive, label, commands } => {
+        Dialog::Confirm {
+            title,
+            text,
+            button,
+            destructive,
+            label,
+            commands,
+        } => {
             ui.heading(title.as_str());
             ui.add_space(6.0);
             ui.label(text.as_str());
@@ -520,7 +727,11 @@ fn body(ui: &mut egui::Ui, dialog: &mut Dialog, tab: Option<&mut RepoTab>) -> Ou
                 text_field(ui, url, "https://github.com/owner/repo.git", true);
                 if *url != before {
                     let derived = url.trim().trim_end_matches('/').trim_end_matches(".git");
-                    *name = derived.rsplit(['/', ':']).next().unwrap_or_default().to_owned();
+                    *name = derived
+                        .rsplit(['/', ':'])
+                        .next()
+                        .unwrap_or_default()
+                        .to_owned();
                 }
                 ui.end_row();
                 ui.label("Parent folder:");
@@ -537,7 +748,8 @@ fn body(ui: &mut egui::Ui, dialog: &mut Dialog, tab: Option<&mut RepoTab>) -> Ou
                 text_field(ui, name, "", false);
                 ui.end_row();
             });
-            let valid = !url.trim().is_empty() && !parent.trim().is_empty() && !name.trim().is_empty();
+            let valid =
+                !url.trim().is_empty() && !parent.trim().is_empty() && !name.trim().is_empty();
             let (ok, cancel) = buttons(ui, "Clone", valid, false);
             if ok {
                 app = Some(AppAction::Clone {
@@ -547,7 +759,12 @@ fn body(ui: &mut egui::Ui, dialog: &mut Dialog, tab: Option<&mut RepoTab>) -> Ou
             }
             close = ok || cancel;
         }
-        Dialog::RepoSettings { repo, original, edit, inherited } => {
+        Dialog::RepoSettings {
+            repo,
+            original,
+            edit,
+            inherited,
+        } => {
             let p = theme::pal(ui);
             ui.heading(format!("Repository Settings — {repo}"));
             ui.add_space(8.0);
@@ -555,20 +772,36 @@ fn body(ui: &mut egui::Ui, dialog: &mut Dialog, tab: Option<&mut RepoTab>) -> Ou
             ui.add_space(2.0);
             grid(ui, "repo_identity", |ui| {
                 ui.label("Name:");
-                let hint = inherited.user_name.clone().unwrap_or_else(|| "Not set".into());
+                let hint = inherited
+                    .user_name
+                    .clone()
+                    .unwrap_or_else(|| "Not set".into());
                 text_field(ui, &mut edit.user_name, &hint, true);
                 ui.end_row();
                 ui.label("Email:");
-                let hint = inherited.user_email.clone().unwrap_or_else(|| "Not set".into());
+                let hint = inherited
+                    .user_email
+                    .clone()
+                    .unwrap_or_else(|| "Not set".into());
                 text_field(ui, &mut edit.user_email, &hint, false);
                 ui.end_row();
             });
             let email_ok = edit.user_email.trim().is_empty() || edit.user_email.contains('@');
-            let effective_name = Some(edit.user_name.trim()).filter(|s| !s.is_empty()).map(str::to_owned).or(inherited.user_name.clone());
-            let effective_email = Some(edit.user_email.trim()).filter(|s| !s.is_empty()).map(str::to_owned).or(inherited.user_email.clone());
+            let effective_name = Some(edit.user_name.trim())
+                .filter(|s| !s.is_empty())
+                .map(str::to_owned)
+                .or(inherited.user_name.clone());
+            let effective_email = Some(edit.user_email.trim())
+                .filter(|s| !s.is_empty())
+                .map(str::to_owned)
+                .or(inherited.user_email.clone());
             match (&effective_name, &effective_email) {
                 _ if !email_ok => {
-                    ui.label(RichText::new("That doesn't look like an email address.").small().color(p.removed));
+                    ui.label(
+                        RichText::new("That doesn't look like an email address.")
+                            .small()
+                            .color(p.removed),
+                    );
                 }
                 (Some(n), Some(e)) => {
                     ui.label(RichText::new(format!("Commits will be authored as {n} <{e}>. Leave empty to use your global identity.")).small().color(p.muted));
@@ -583,9 +816,17 @@ fn body(ui: &mut egui::Ui, dialog: &mut Dialog, tab: Option<&mut RepoTab>) -> Ou
                 ui.label(RichText::new("Pull").strong());
                 egui::ComboBox::from_id_salt("repo_pull")
                     .width(260.0)
-                    .selected_text(if edit.pull == PullMode::Inherit { format!("Use global ({})", inherited.pull) } else { edit.pull.label().to_owned() })
+                    .selected_text(if edit.pull == PullMode::Inherit {
+                        format!("Use global ({})", inherited.pull)
+                    } else {
+                        edit.pull.label().to_owned()
+                    })
                     .show_ui(ui, |ui| {
-                        ui.selectable_value(&mut edit.pull, PullMode::Inherit, format!("Use global ({})", inherited.pull));
+                        ui.selectable_value(
+                            &mut edit.pull,
+                            PullMode::Inherit,
+                            format!("Use global ({})", inherited.pull),
+                        );
                         for m in [PullMode::Merge, PullMode::Rebase, PullMode::FastForwardOnly] {
                             ui.selectable_value(&mut edit.pull, m, m.label());
                         }
@@ -598,15 +839,22 @@ fn body(ui: &mut egui::Ui, dialog: &mut Dialog, tab: Option<&mut RepoTab>) -> Ou
                     Some(true) => "Prune deleted remote branches".to_owned(),
                     Some(false) => "Keep deleted remote branches".to_owned(),
                 };
-                egui::ComboBox::from_id_salt("repo_prune").width(260.0).selected_text(text(edit.prune)).show_ui(ui, |ui| {
-                    for v in [None, Some(true), Some(false)] {
-                        ui.selectable_value(&mut edit.prune, v, text(v));
-                    }
-                });
+                egui::ComboBox::from_id_salt("repo_prune")
+                    .width(260.0)
+                    .selected_text(text(edit.prune))
+                    .show_ui(ui, |ui| {
+                        for v in [None, Some(true), Some(false)] {
+                            ui.selectable_value(&mut edit.prune, v, text(v));
+                        }
+                    });
                 ui.end_row();
             });
             ui.add_space(6.0);
-            ui.label(RichText::new("Saved in this repository's .git/config (git config --local).").small().color(p.muted));
+            ui.label(
+                RichText::new("Saved in this repository's .git/config (git config --local).")
+                    .small()
+                    .color(p.muted),
+            );
 
             let changed = *edit != *original;
             let (ok, cancel) = buttons(ui, "Save", changed && email_ok, false);
@@ -628,19 +876,39 @@ fn body(ui: &mut egui::Ui, dialog: &mut Dialog, tab: Option<&mut RepoTab>) -> Ou
             grid(ui, "settings", |ui| {
                 ui.label("Theme:");
                 ui.horizontal(|ui| {
-                    ui.selectable_value(&mut settings.theme, crate::app::ThemeChoice::System, "System");
+                    ui.selectable_value(
+                        &mut settings.theme,
+                        crate::app::ThemeChoice::System,
+                        "System",
+                    );
                     ui.selectable_value(&mut settings.theme, crate::app::ThemeChoice::Dark, "Dark");
-                    ui.selectable_value(&mut settings.theme, crate::app::ThemeChoice::Light, "Light");
+                    ui.selectable_value(
+                        &mut settings.theme,
+                        crate::app::ThemeChoice::Light,
+                        "Light",
+                    );
                 });
                 ui.end_row();
                 ui.label("Git executable:");
-                ui.add(egui::TextEdit::singleline(&mut settings.git_path).hint_text("git (from PATH)").desired_width(260.0));
+                ui.add(
+                    egui::TextEdit::singleline(&mut settings.git_path)
+                        .hint_text("git (from PATH)")
+                        .desired_width(260.0),
+                );
                 ui.end_row();
                 ui.label("Max commits loaded:");
-                ui.add(egui::DragValue::new(&mut settings.commit_limit).range(100..=500_000).speed(100));
+                ui.add(
+                    egui::DragValue::new(&mut settings.commit_limit)
+                        .range(100..=500_000)
+                        .speed(100),
+                );
                 ui.end_row();
                 ui.label("Diff font size:");
-                ui.add(egui::DragValue::new(&mut settings.diff_font_size).range(9.0..=24.0).speed(0.25));
+                ui.add(
+                    egui::DragValue::new(&mut settings.diff_font_size)
+                        .range(9.0..=24.0)
+                        .speed(0.25),
+                );
                 ui.end_row();
                 ui.label("UI zoom:");
                 ui.add(egui::Slider::new(&mut settings.zoom, 0.75..=1.75).step_by(0.05));

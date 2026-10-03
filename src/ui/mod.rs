@@ -1,8 +1,8 @@
 pub mod changes;
 pub mod conflict;
 pub mod dialogs;
-pub mod file_history;
 pub mod diff_view;
+pub mod file_history;
 pub mod history;
 pub mod image_view;
 pub mod sidebar;

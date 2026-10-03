@@ -16,7 +16,11 @@ pub fn human_size(bytes: u64) -> String {
     let decimals = if unit >= 2 || value < 10.0 { 2 } else { 1 };
     let text = format!("{value:.decimals$}");
     // "3.10 MB" -> "3.1 MB", "2.00 KB" -> "2 KB"
-    let text = if text.contains('.') { text.trim_end_matches('0').trim_end_matches('.').to_owned() } else { text };
+    let text = if text.contains('.') {
+        text.trim_end_matches('0').trim_end_matches('.').to_owned()
+    } else {
+        text
+    };
     format!("{text} {}", UNITS[unit])
 }
 

@@ -33,7 +33,11 @@ pub fn reveal(path: &Path) {
     }
     #[cfg(all(unix, not(target_os = "macos")))]
     {
-        let dir = if path.is_dir() { path } else { path.parent().unwrap_or(path) };
+        let dir = if path.is_dir() {
+            path
+        } else {
+            path.parent().unwrap_or(path)
+        };
         spawn(Command::new("xdg-open").arg(dir));
     }
 }
@@ -57,12 +61,24 @@ pub fn open_terminal(dir: &Path) {
         // Prefer Windows Terminal, fall back to cmd.
         let ok = Command::new("wt").arg("-d").arg(dir).spawn().is_ok();
         if !ok {
-            spawn(Command::new("cmd").args(["/C", "start", "cmd"]).current_dir(dir));
+            spawn(
+                Command::new("cmd")
+                    .args(["/C", "start", "cmd"])
+                    .current_dir(dir),
+            );
         }
     }
     #[cfg(all(unix, not(target_os = "macos")))]
     {
-        for term in ["x-terminal-emulator", "gnome-terminal", "konsole", "xfce4-terminal", "alacritty", "kitty", "xterm"] {
+        for term in [
+            "x-terminal-emulator",
+            "gnome-terminal",
+            "konsole",
+            "xfce4-terminal",
+            "alacritty",
+            "kitty",
+            "xterm",
+        ] {
             if Command::new(term).current_dir(dir).spawn().is_ok() {
                 return;
             }
@@ -106,8 +122,17 @@ mod tests {
 
     #[test]
     fn converts_remote_urls() {
-        assert_eq!(web_url("git@github.com:a/b.git").as_deref(), Some("https://github.com/a/b"));
-        assert_eq!(web_url("https://user@github.com/a/b.git").as_deref(), Some("https://github.com/a/b"));
-        assert_eq!(web_url("ssh://git@host:22/a/b").as_deref(), Some("https://host/a/b"));
+        assert_eq!(
+            web_url("git@github.com:a/b.git").as_deref(),
+            Some("https://github.com/a/b")
+        );
+        assert_eq!(
+            web_url("https://user@github.com/a/b.git").as_deref(),
+            Some("https://github.com/a/b")
+        );
+        assert_eq!(
+            web_url("ssh://git@host:22/a/b").as_deref(),
+            Some("https://host/a/b")
+        );
     }
 }

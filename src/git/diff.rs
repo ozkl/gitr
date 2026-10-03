@@ -49,11 +49,17 @@ pub struct FileDiff {
 pub const MAX_DIFF_BYTES: usize = 20 * 1024 * 1024;
 
 pub fn too_large_notice(bytes: usize) -> String {
-    format!("File too large to display ({})", crate::format::human_size(bytes as u64))
+    format!(
+        "File too large to display ({})",
+        crate::format::human_size(bytes as u64)
+    )
 }
 
 fn parse_range(s: &str) -> u32 {
-    s.split(',').next().and_then(|n| n.parse().ok()).unwrap_or(0)
+    s.split(',')
+        .next()
+        .and_then(|n| n.parse().ok())
+        .unwrap_or(0)
 }
 
 /// Parses `git diff` output that contains (at most) a single file.
@@ -95,19 +101,39 @@ pub fn parse(text: &str) -> FileDiff {
             LineKind::Context => {
                 old_no += 1;
                 new_no += 1;
-                DiffLine { kind, old_no: Some(old_no - 1), new_no: Some(new_no - 1), text: text.to_owned() }
+                DiffLine {
+                    kind,
+                    old_no: Some(old_no - 1),
+                    new_no: Some(new_no - 1),
+                    text: text.to_owned(),
+                }
             }
             LineKind::Added => {
                 new_no += 1;
                 diff.added += 1;
-                DiffLine { kind, old_no: None, new_no: Some(new_no - 1), text: text.to_owned() }
+                DiffLine {
+                    kind,
+                    old_no: None,
+                    new_no: Some(new_no - 1),
+                    text: text.to_owned(),
+                }
             }
             LineKind::Removed => {
                 old_no += 1;
                 diff.removed += 1;
-                DiffLine { kind, old_no: Some(old_no - 1), new_no: None, text: text.to_owned() }
+                DiffLine {
+                    kind,
+                    old_no: Some(old_no - 1),
+                    new_no: None,
+                    text: text.to_owned(),
+                }
             }
-            LineKind::NoNewline => DiffLine { kind, old_no: None, new_no: None, text: text.to_owned() },
+            LineKind::NoNewline => DiffLine {
+                kind,
+                old_no: None,
+                new_no: None,
+                text: text.to_owned(),
+            },
         };
         hunk.lines.push(line);
     }
@@ -121,10 +147,14 @@ fn looks_binary(bytes: &[u8]) -> bool {
 /// Builds a diff showing an untracked file as entirely added.
 pub fn untracked_file_diff(repo: &Path, path: &str) -> FileDiff {
     let full = repo.join(path);
-    let mut diff = FileDiff { untracked: true, ..Default::default() };
+    let mut diff = FileDiff {
+        untracked: true,
+        ..Default::default()
+    };
     let Ok(bytes) = std::fs::read(&full) else {
         if full.is_dir() {
-            diff.header.push("Directory (possibly a nested repository)".into());
+            diff.header
+                .push("Directory (possibly a nested repository)".into());
         }
         return diff;
     };
@@ -186,7 +216,13 @@ fn run_diff(repo: &Path, args: Vec<String>) -> Result<FileDiff, String> {
     let refs: Vec<&str> = args.iter().map(String::as_str).collect();
     let out = cmd::run(repo, &refs)?;
     if out.len() > MAX_DIFF_BYTES {
-        return Ok(FileDiff { notice: Some(format!("Diff too large to display ({})", crate::format::human_size(out.len() as u64))), ..Default::default() });
+        return Ok(FileDiff {
+            notice: Some(format!(
+                "Diff too large to display ({})",
+                crate::format::human_size(out.len() as u64)
+            )),
+            ..Default::default()
+        });
     }
     Ok(parse(&out))
 }
@@ -273,7 +309,11 @@ pub fn build_patch(diff: &FileDiff, selection: &Selection, reverse: bool) -> Opt
                 let added = line.kind == LineKind::Added;
                 if is_selected {
                     body.push(if added { '+' } else { '-' });
-                    if added { new_count += 1 } else { old_count += 1 }
+                    if added {
+                        new_count += 1
+                    } else {
+                        old_count += 1
+                    }
                     any_change = true;
                     last_emitted = true;
                 } else if added == reverse {
@@ -387,17 +427,35 @@ index 1111111..2222222 100644
         std::fs::write(dir.join("f.txt"), "one\nTWO\nthree\nfour\n").unwrap();
 
         // Stage only the "+four" line.
-        let file = FileChange { path: "f.txt".into(), old_path: None, kind: ChangeKind::Modified };
+        let file = FileChange {
+            path: "f.txt".into(),
+            old_path: None,
+            kind: ChangeKind::Modified,
+        };
         let d = working_diff(&dir, &file, false, 3, false).unwrap();
-        let idx = d.hunks[0].lines.iter().position(|l| l.text == "four").unwrap();
+        let idx = d.hunks[0]
+            .lines
+            .iter()
+            .position(|l| l.text == "four")
+            .unwrap();
         let patch = build_patch(&d, &Selection::Lines(0, [idx].into()), false).unwrap();
-        cmd::run_with_input(&dir, &["apply", "--cached", "--recount", "-"], patch.as_bytes()).unwrap();
+        cmd::run_with_input(
+            &dir,
+            &["apply", "--cached", "--recount", "-"],
+            patch.as_bytes(),
+        )
+        .unwrap();
         assert_eq!(git(&["show", ":f.txt"]), "one\ntwo\nthree\nfour\n");
 
         // Unstage it again with a reverse patch of the staged diff.
         let staged = working_diff(&dir, &file, true, 3, false).unwrap();
         let patch = build_patch(&staged, &Selection::Hunk(0), true).unwrap();
-        cmd::run_with_input(&dir, &["apply", "--cached", "--reverse", "--recount", "-"], patch.as_bytes()).unwrap();
+        cmd::run_with_input(
+            &dir,
+            &["apply", "--cached", "--reverse", "--recount", "-"],
+            patch.as_bytes(),
+        )
+        .unwrap();
         assert_eq!(git(&["show", ":f.txt"]), "one\ntwo\nthree\n");
         let _ = std::fs::remove_dir_all(&dir);
     }

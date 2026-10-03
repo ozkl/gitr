@@ -51,7 +51,17 @@ fn classify(prompt: &str) -> Kind {
     let p = prompt.to_lowercase();
     if p.contains("(yes/no") {
         Kind::YesNo
-    } else if ["password", "passphrase", "token", "pin", "passcode", "secret"].iter().any(|w| p.contains(w)) {
+    } else if [
+        "password",
+        "passphrase",
+        "token",
+        "pin",
+        "passcode",
+        "secret",
+    ]
+    .iter()
+    .any(|w| p.contains(w))
+    {
         Kind::Secret
     } else {
         Kind::Text
@@ -222,8 +232,14 @@ mod tests {
     #[test]
     fn classifies_prompts() {
         assert_eq!(classify("Username for 'https://github.com': "), Kind::Text);
-        assert_eq!(classify("Password for 'https://alp@github.com': "), Kind::Secret);
-        assert_eq!(classify("Enter passphrase for key '/Users/alp/.ssh/id_ed25519': "), Kind::Secret);
+        assert_eq!(
+            classify("Password for 'https://alp@github.com': "),
+            Kind::Secret
+        );
+        assert_eq!(
+            classify("Enter passphrase for key '/Users/alp/.ssh/id_ed25519': "),
+            Kind::Secret
+        );
         assert_eq!(
             classify("Are you sure you want to continue connecting (yes/no/[fingerprint])? "),
             Kind::YesNo
