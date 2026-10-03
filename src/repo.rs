@@ -83,6 +83,14 @@ pub struct Activity {
     pub time: chrono::DateTime<chrono::Local>,
 }
 
+/// Built-in three-way merge of one conflicted file.
+pub struct MergeEditor {
+    pub path: String,
+    pub segments: Vec<git::conflict::Segment>,
+    /// Conflict to scroll to on the next frame.
+    pub scroll_to: Option<usize>,
+}
+
 /// State of the file history window.
 pub struct FileHistory {
     pub path: String,
@@ -137,6 +145,9 @@ pub struct RepoTab {
     pub image_previews: HashMap<String, Loaded<crate::preview::ImagePair>>,
     /// Open file history window, if any.
     pub file_history: Option<FileHistory>,
+    pub merge_editor: Option<MergeEditor>,
+    /// The prepared merge message was put into the commit box for the current operation.
+    merge_message_loaded: bool,
 
     pub selected_change: Option<(bool, String)>,
     pub change_diff: Option<(DiffKey, Loaded<FileDiff>)>,
@@ -224,6 +235,8 @@ impl RepoTab {
             tree_file: None,
             image_previews: HashMap::new(),
             file_history: None,
+            merge_editor: None,
+            merge_message_loaded: false,
             selected_change: None,
             change_diff: None,
             line_selection: BTreeSet::new(),
@@ -348,7 +361,10 @@ impl RepoTab {
                     }
                 },
                 Msg::Refs(generation, result) if generation == self.refs_gen => match result {
-                    Ok(refs) => self.refs = refs,
+                    Ok(refs) => {
+                        self.refs = refs;
+                        self.prefill_merge_message();
+                    }
                     Err(e) => self.load_error = Some(e),
                 },
                 Msg::Status(generation, result) if generation == self.status_gen => {
@@ -470,6 +486,10 @@ impl RepoTab {
                 self.selected_changes.clear();
                 self.change_diff = None;
             }
+        }
+        // Close the merge editor once its file is no longer conflicted.
+        if self.merge_editor.as_ref().is_some_and(|e| !self.status.conflicts.contains_key(&e.path)) {
+            self.merge_editor = None;
         }
     }
 
@@ -690,6 +710,61 @@ impl RepoTab {
         } else {
             self.select_change(staged, next);
         }
+    }
+
+    /// Puts git's prepared message (MERGE_MSG) into an empty commit box once per operation.
+    fn prefill_merge_message(&mut self) {
+        if self.refs.state.is_none() {
+            self.merge_message_loaded = false;
+            return;
+        }
+        if self.merge_message_loaded {
+            return;
+        }
+        self.merge_message_loaded = true;
+        if !self.commit_subject.trim().is_empty() {
+            return;
+        }
+        if let Some(msg) = git::conflict::prepared_message(&self.path) {
+            let (subject, body) = msg.split_once('\n').unwrap_or((&msg, ""));
+            self.commit_subject = subject.trim().to_owned();
+            self.commit_body = body.trim().to_owned();
+        }
+    }
+
+    /// Resolves a conflicted file by taking our or their version entirely.
+    pub fn take_conflict_side(&mut self, path: &str, ours: bool) {
+        let Some(kind) = self.status.conflicts.get(path).copied() else { return };
+        let side = if ours { "local" } else { "remote" };
+        self.merge_editor = None;
+        self.git_seq(format!("Use {side} version of {path}"), git::conflict::take_side_commands(path, kind, ours));
+    }
+
+    /// Opens the built-in merge editor for a conflicted text file.
+    pub fn open_merge_editor(&mut self, path: &str) -> Result<(), String> {
+        let bytes = std::fs::read(self.path.join(path)).map_err(|e| format!("Cannot read {path}: {e}"))?;
+        let text = String::from_utf8(bytes).map_err(|_| "This file is not UTF-8 text; use an external merge tool.".to_owned())?;
+        let segments = git::conflict::parse(&text).ok_or_else(|| "No conflict markers found in the file.".to_owned())?;
+        self.merge_editor = Some(MergeEditor { path: path.to_owned(), segments, scroll_to: Some(0) });
+        Ok(())
+    }
+
+    /// Writes the merged content and marks the file resolved.
+    pub fn save_merge(&mut self) {
+        let Some(editor) = self.merge_editor.take() else { return };
+        let Some(content) = git::conflict::render(&editor.segments) else {
+            self.merge_editor = Some(editor);
+            return;
+        };
+        let path = editor.path;
+        self.run_task(
+            format!("Resolve {path}"),
+            OpKind::Generic,
+            Box::new(move |repo| {
+                std::fs::write(repo.join(&path), content).map_err(|e| format!("Cannot write {path}: {e}"))?;
+                cmd::run(repo, &["add", "--", &path])
+            }),
+        );
     }
 
     /// Opens the history window for `path`, starting at `rev`.

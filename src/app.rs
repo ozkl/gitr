@@ -771,6 +771,10 @@ impl GitrApp {
                 "tree_file" => tab.load_tree_file(value.to_owned()),
                 "light" => self.settings.theme = ThemeChoice::Light,
                 "home" => self.active = None,
+                "merge_editor" => {
+                    tab.select_change(false, value.to_owned());
+                    let _ = tab.open_merge_editor(value);
+                }
                 "expand_all" => {
                     if let Some(crate::repo::Loaded::Ready(d)) = &tab.details {
                         let files = d.files.clone();

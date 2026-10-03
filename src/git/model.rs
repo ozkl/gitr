@@ -96,6 +96,8 @@ pub struct Refs {
     pub labels: HashMap<String, Vec<RefLabel>>,
     /// In-progress operation (merge, rebase, cherry-pick, ...), if any.
     pub state: Option<RepoState>,
+    /// Names of the two sides while an operation is in progress.
+    pub sides: Option<super::conflict::SideLabels>,
     /// Effective commit identity ("Name <email>"), if configured.
     pub identity: Option<String>,
 }
@@ -196,6 +198,8 @@ pub struct Status {
     pub unstaged: Vec<FileChange>,
     /// Changed paths tracked with Git LFS.
     pub lfs: HashSet<String>,
+    /// Conflicted paths and how they conflict.
+    pub conflicts: HashMap<String, super::conflict::ConflictKind>,
 }
 
 impl Status {
@@ -410,6 +414,7 @@ pub fn load_refs(repo: &Path) -> Result<Refs, String> {
     refs.stashes = load_stashes(repo);
     refs.submodules = load_submodules(repo);
     refs.state = repo_state(repo);
+    refs.sides = refs.state.map(|s| super::conflict::side_labels(repo, s, refs.head_branch.as_deref()));
     refs.identity = cmd::run(repo, &["var", "GIT_AUTHOR_IDENT"]).ok().map(|s| strip_ident_date(s.trim()));
     Ok(refs)
 }
@@ -544,11 +549,11 @@ pub fn load_status(repo: &Path) -> Result<Status, String> {
             }
             b'u' => {
                 let parts: Vec<&str> = entry.splitn(11, ' ').collect();
-                status.unstaged.push(FileChange {
-                    path: parts.last().copied().unwrap_or_default().to_owned(),
-                    old_path: None,
-                    kind: ChangeKind::Conflicted,
-                });
+                let path = parts.last().copied().unwrap_or_default().to_owned();
+                if let Some(kind) = parts.get(1).and_then(|xy| super::conflict::ConflictKind::from_xy(xy)) {
+                    status.conflicts.insert(path.clone(), kind);
+                }
+                status.unstaged.push(FileChange { path, old_path: None, kind: ChangeKind::Conflicted });
             }
             b'?' => status.unstaged.push(FileChange {
                 path: entry[2..].to_owned(),

@@ -506,26 +506,28 @@ fn file_menu(ui: &mut egui::Ui, tab: &mut RepoTab, cx: &mut Ctx, file: &FileChan
 
 fn conflict_actions(ui: &mut egui::Ui, tab: &mut RepoTab, file: &FileChange) {
     let path = file.path.clone();
-    if ui.button("Resolve using mine (ours)").clicked() {
-        tab.git_seq(
-            format!("Resolve {path}"),
-            vec![vec![s("checkout"), s("--ours"), s("--"), path.clone()], vec![s("add"), s("--"), path.clone()]],
-        );
+    if ui.button("Use local version (ours)").clicked() {
+        tab.take_conflict_side(&path, true);
         ui.close();
     }
-    if ui.button("Resolve using theirs").clicked() {
-        tab.git_seq(
-            format!("Resolve {path}"),
-            vec![vec![s("checkout"), s("--theirs"), s("--"), path.clone()], vec![s("add"), s("--"), path.clone()]],
-        );
+    if ui.button("Use remote version (theirs)").clicked() {
+        tab.take_conflict_side(&path, false);
         ui.close();
     }
-    if ui.button("Mark as resolved").clicked() {
-        tab.stage(vec![path.clone()]);
+    if tab.status.conflicts.get(&path).is_some_and(|k| k.has_markers()) && ui.button("Merge in Gitr…").clicked() {
+        tab.select_change(false, path.clone());
+        if let Err(e) = tab.open_merge_editor(&path) {
+            tab.notices.push(crate::repo::Notice { title: "Cannot open merge editor".into(), text: e, error: true });
+        }
         ui.close();
     }
-    if ui.button("Open in merge tool").clicked() {
+    if ui.button("Open in external merge tool").clicked() {
         tab.git(format!("Merge tool {path}"), vec![s("mergetool"), s("--no-prompt"), s("--"), path.clone()]);
+        ui.close();
+    }
+    ui.separator();
+    if ui.button("Mark as resolved").on_hover_text("Stage the file as it is now in the working tree").clicked() {
+        tab.stage(vec![path.clone()]);
         ui.close();
     }
 }
@@ -568,8 +570,17 @@ fn commit_box(ui: &mut egui::Ui, tab: &mut RepoTab, cx: &mut Ctx) {
         *cx.dialog = Some(Dialog::repo_settings(tab));
     }
     ui.add_space(4.0);
+    let unresolved = tab.status.conflicts.len();
     let can_commit = (!tab.status.staged.is_empty() || tab.amend || tab.refs.state == Some(crate::git::RepoState::Merging))
-        && !tab.commit_subject.trim().is_empty();
+        && !tab.commit_subject.trim().is_empty()
+        && unresolved == 0;
+    if unresolved > 0 {
+        ui.label(
+            RichText::new(format!("{} Resolve {unresolved} conflicted file{} before committing", icon::WARNING, if unresolved == 1 { "" } else { "s" }))
+                .small()
+                .color(p.modified),
+        );
+    }
     let mut commit = false;
     let mut and_push = false;
     ui.horizontal(|ui| {
@@ -636,7 +647,9 @@ fn diff_panel(ui: &mut egui::Ui, tab: &mut RepoTab, cx: &mut Ctx) {
         if tab.status.lfs.contains(&file.path) {
             theme::lfs_badge(ui, false);
         }
-        let is_image = crate::preview::is_image_path(&file.path);
+        let conflicted = file.kind == ChangeKind::Conflicted;
+        // Images and conflicts have their own views; the text-diff controls don't apply.
+        let is_image = crate::preview::is_image_path(&file.path) || conflicted;
         if let (Some((_, Loaded::Ready(d))), false) = (&tab.change_diff, is_image) {
             ui.label(RichText::new(format!("+{}", d.added)).color(p.added));
             ui.label(RichText::new(format!("-{}", d.removed)).color(p.removed));
@@ -661,10 +674,10 @@ fn diff_panel(ui: &mut egui::Ui, tab: &mut RepoTab, cx: &mut Ctx) {
                     tab.unstage(vec![file.path.clone()]);
                 }
             } else {
-                if ui.button(format!("{} Discard", icon::TRASH)).clicked() {
+                if !conflicted && ui.button(format!("{} Discard", icon::TRASH)).clicked() {
                     *cx.dialog = Some(Dialog::Discard { files: vec![file.clone()] });
                 }
-                if file.kind == ChangeKind::Conflicted {
+                if conflicted {
                     ui.menu_button("Resolve", |ui| conflict_actions(ui, tab, &file));
                 } else if ui.button(format!("{} Stage File", icon::PLUS)).clicked() {
                     tab.stage(vec![file.path.clone()]);
@@ -677,6 +690,11 @@ fn diff_panel(ui: &mut egui::Ui, tab: &mut RepoTab, cx: &mut Ctx) {
         });
     });
     ui.separator();
+
+    if file.kind == ChangeKind::Conflicted {
+        crate::ui::conflict::panel(ui, tab, cx, &file);
+        return;
+    }
 
     if crate::preview::is_image_path(&file.path) && file.kind != ChangeKind::Conflicted {
         use crate::preview::Source;
