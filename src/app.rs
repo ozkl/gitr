@@ -27,6 +27,8 @@ pub enum ThemeChoice {
 pub struct Settings {
     pub theme: ThemeChoice,
     pub git_path: String,
+    /// ssh program git should use; empty means `ssh` from PATH.
+    pub ssh_path: String,
     pub commit_limit: usize,
     pub diff_font_size: f32,
     /// Show local changes grouped by folder.
@@ -44,6 +46,7 @@ impl Default for Settings {
         Self {
             theme: ThemeChoice::System,
             git_path: String::new(),
+            ssh_path: String::new(),
             commit_limit: 20_000,
             diff_font_size: 12.5,
             zoom: 1.0,
@@ -92,6 +95,8 @@ pub struct GitrApp {
     repo_filter: String,
     git_version: Option<String>,
     logo: egui::TextureHandle,
+    /// Title last sent to the window.
+    window_title: String,
     github: crate::ui::github::GitHub,
     #[cfg(feature = "screenshot")]
     devshot: crate::devshot::DevShot,
@@ -106,6 +111,7 @@ impl GitrApp {
             .and_then(|s| eframe::get_value(s, STORAGE_KEY))
             .unwrap_or_default();
         cmd::set_git_binary(&persisted.settings.git_path);
+        cmd::set_ssh_program(&persisted.settings.ssh_path);
         let github = crate::ui::github::GitHub::new(&cc.egui_ctx, &persisted.settings);
         let mut app = Self {
             repos: persisted.repos.into_iter().filter(|p| p.exists()).collect(),
@@ -121,6 +127,7 @@ impl GitrApp {
             repo_filter: String::new(),
             git_version: cmd::git_version(),
             logo: load_logo(&cc.egui_ctx),
+            window_title: String::new(),
             github,
             #[cfg(feature = "screenshot")]
             devshot: crate::devshot::DevShot::from_env(),
@@ -277,6 +284,7 @@ impl GitrApp {
             AppAction::SaveSettings(s) => {
                 let limit_changed = s.commit_limit != self.settings.commit_limit;
                 self.settings = s;
+                cmd::set_ssh_program(&self.settings.ssh_path);
                 self.apply_settings(ctx);
                 for t in &mut self.tabs {
                     t.commit_limit = self.settings.commit_limit;
@@ -1328,7 +1336,12 @@ impl eframe::App for GitrApp {
             Some(t) => format!("Gitr — {}", t.name),
             None => "Gitr".to_owned(),
         };
-        ctx.send_viewport_cmd(egui::ViewportCommand::Title(title));
+        // Only when it changes: a viewport command schedules a repaint, so sending one
+        // every frame would keep the app redrawing forever.
+        if title != self.window_title {
+            self.window_title = title.clone();
+            ctx.send_viewport_cmd(egui::ViewportCommand::Title(title));
+        }
 
         let p = theme::pal(ui);
         egui::Panel::top("toolbar")

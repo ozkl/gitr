@@ -1025,6 +1025,38 @@ fn body(ui: &mut egui::Ui, dialog: &mut Dialog, tab: Option<&mut RepoTab>) -> Ou
                         .desired_width(260.0),
                 );
                 ui.end_row();
+                ui.label("SSH executable:");
+                ui.horizontal(|ui| {
+                    ui.add(
+                        egui::TextEdit::singleline(&mut settings.ssh_path)
+                            .hint_text("ssh (from PATH)")
+                            .desired_width(226.0),
+                    )
+                    .on_hover_text(
+                        "The ssh program git uses for SSH remotes. Set this if you need a specific \
+                         build, e.g. Homebrew's ssh for hardware security keys.",
+                    );
+                    // Offer the ssh programs found in the usual places.
+                    ui.menu_button(egui_phosphor::regular::CARET_DOWN, |ui| {
+                        if ui.button("ssh (from PATH)").clicked() {
+                            settings.ssh_path.clear();
+                            ui.close();
+                        }
+                        for candidate in [
+                            "/opt/homebrew/bin/ssh",
+                            "/usr/local/bin/ssh",
+                            "/usr/bin/ssh",
+                        ] {
+                            if std::path::Path::new(candidate).is_file()
+                                && ui.button(candidate).clicked()
+                            {
+                                settings.ssh_path = candidate.to_owned();
+                                ui.close();
+                            }
+                        }
+                    });
+                });
+                ui.end_row();
                 ui.label("Max commits loaded:");
                 ui.add(
                     egui::DragValue::new(&mut settings.commit_limit)
@@ -1052,7 +1084,16 @@ fn body(ui: &mut egui::Ui, dialog: &mut Dialog, tab: Option<&mut RepoTab>) -> Ou
                 .small()
                 .color(theme::pal(ui).muted),
             );
-            let (ok, cancel) = buttons(ui, "Save", true, false);
+            let ssh = settings.ssh_path.trim();
+            let ssh_ok = ssh.is_empty() || std::path::Path::new(ssh).is_file();
+            if !ssh_ok {
+                ui.label(
+                    RichText::new(format!("SSH executable not found: {ssh}"))
+                        .small()
+                        .color(theme::pal(ui).removed),
+                );
+            }
+            let (ok, cancel) = buttons(ui, "Save", ssh_ok, false);
             if ok {
                 app = Some(AppAction::SaveSettings(settings.clone()));
             }

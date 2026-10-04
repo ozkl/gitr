@@ -1,12 +1,41 @@
 //! Thin wrapper around the `git` executable.
 
+use std::ffi::{OsStr, OsString};
 use std::io::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::OnceLock;
+use std::sync::{OnceLock, RwLock};
 
 static GIT_BINARY: OnceLock<String> = OnceLock::new();
 static EXTRA_ENV: OnceLock<Vec<(&'static str, String)>> = OnceLock::new();
+
+/// The ssh program chosen in Settings, if any (may change while running).
+static SSH_PROGRAM: RwLock<Option<PathBuf>> = RwLock::new(None);
+
+/// Sets the ssh executable git should use; an empty path means "ssh from PATH".
+pub fn set_ssh_program(path: &str) {
+    let path = path.trim();
+    *SSH_PROGRAM.write().unwrap() = (!path.is_empty()).then(|| PathBuf::from(path));
+}
+
+/// Environment that makes git use `ssh_program`: `GIT_SSH` for plain connections, and, when
+/// the file is called `ssh`, its folder first on `PATH` so that a repository's own
+/// `core.sshCommand = ssh -i <key> …` resolves to the same program.
+fn ssh_env(ssh_program: &Path, current_path: Option<&OsStr>) -> Vec<(&'static str, OsString)> {
+    let mut env = vec![("GIT_SSH", ssh_program.as_os_str().to_owned())];
+    let is_plain_ssh = ssh_program.file_stem().is_some_and(|n| n == "ssh");
+    if let (true, Some(dir)) = (is_plain_ssh, ssh_program.parent()) {
+        let rest = current_path
+            .map(std::env::split_paths)
+            .into_iter()
+            .flatten();
+        let paths = std::iter::once(dir.to_path_buf()).chain(rest.filter(|p| p != dir));
+        if let Ok(joined) = std::env::join_paths(paths) {
+            env.push(("PATH", joined));
+        }
+    }
+    env
+}
 
 /// Supplies extra `-c key=value` options for a command (e.g. which account to authenticate as).
 pub type ConfigHook = fn(&Path, &[&str]) -> Vec<String>;
@@ -69,6 +98,15 @@ fn base_command(repo: &Path) -> Command {
                 .into_iter()
                 .flatten()
                 .map(|(k, v)| (*k, v.as_str())),
+        )
+        .envs(
+            SSH_PROGRAM
+                .read()
+                .unwrap()
+                .as_deref()
+                .map(|ssh| ssh_env(ssh, std::env::var_os("PATH").as_deref()))
+                .into_iter()
+                .flatten(),
         )
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -164,4 +202,75 @@ pub fn git_version() -> Option<String> {
                 .then(|| String::from_utf8_lossy(&out.stdout).trim().to_owned())
         })
         .clone()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ssh_env_points_git_at_the_chosen_ssh() {
+        let path = OsString::from("/usr/bin:/opt/homebrew/bin:/bin");
+        let env = ssh_env(Path::new("/opt/homebrew/bin/ssh"), Some(&path));
+        assert_eq!(env[0], ("GIT_SSH", OsString::from("/opt/homebrew/bin/ssh")));
+        // Its folder comes first (and only once), so "ssh" in core.sshCommand finds it too.
+        assert_eq!(
+            env[1],
+            ("PATH", OsString::from("/opt/homebrew/bin:/usr/bin:/bin"))
+        );
+        // A differently named program is only used through GIT_SSH.
+        let env = ssh_env(Path::new("/opt/tools/plink"), Some(&path));
+        assert_eq!(env.len(), 1);
+    }
+
+    /// git really runs the configured program, also through a per-repository
+    /// `core.sshCommand` that just says "ssh".
+    #[cfg(unix)]
+    #[test]
+    fn git_uses_the_configured_ssh() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("gitr-ssh-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("bin")).unwrap();
+        // A fake ssh that records that it ran, then fails like an unreachable host.
+        let fake = dir.join("bin/ssh");
+        let marker = dir.join("ran");
+        std::fs::write(
+            &fake,
+            format!(
+                "#!/bin/sh\necho \"$@\" >> '{}'\nexit 255\n",
+                marker.display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let repo = dir.join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        let env = ssh_env(&fake, std::env::var_os("PATH").as_deref());
+        let git = |args: &[&str]| {
+            Command::new(git_binary())
+                .current_dir(&repo)
+                .args(args)
+                .envs(env.iter().cloned())
+                .output()
+                .unwrap()
+        };
+        git(&["init", "-q"]);
+        git(&["ls-remote", "git@example.invalid:a/b.git"]);
+        let first = std::fs::read_to_string(&marker).unwrap();
+        assert!(first.contains("git@example.invalid"), "{first}");
+
+        git(&[
+            "config",
+            "core.sshCommand",
+            "ssh -i '/tmp/some key' -o IdentitiesOnly=yes",
+        ]);
+        git(&["ls-remote", "git@example.invalid:a/b.git"]);
+        let both = std::fs::read_to_string(&marker).unwrap();
+        assert!(
+            both.contains("-i /tmp/some key -o IdentitiesOnly=yes"),
+            "{both}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
