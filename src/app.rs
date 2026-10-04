@@ -31,6 +31,11 @@ pub struct Settings {
     pub diff_font_size: f32,
     /// Show local changes grouped by folder.
     pub changes_tree_view: bool,
+    /// Clone GitHub repositories over SSH rather than HTTPS (the default, which works with
+    /// the signed-in account's token).
+    pub github_clone_via_ssh: bool,
+    /// Logins of signed-in GitHub accounts (their tokens are in the OS credential store).
+    pub github_accounts: Vec<String>,
     pub zoom: f32,
 }
 
@@ -43,6 +48,8 @@ impl Default for Settings {
             diff_font_size: 12.5,
             zoom: 1.0,
             changes_tree_view: false,
+            github_clone_via_ssh: false,
+            github_accounts: Vec::new(),
         }
     }
 }
@@ -85,6 +92,7 @@ pub struct GitrApp {
     repo_filter: String,
     git_version: Option<String>,
     logo: egui::TextureHandle,
+    github: crate::ui::github::GitHub,
     #[cfg(feature = "screenshot")]
     devshot: crate::devshot::DevShot,
 }
@@ -98,6 +106,7 @@ impl GitrApp {
             .and_then(|s| eframe::get_value(s, STORAGE_KEY))
             .unwrap_or_default();
         cmd::set_git_binary(&persisted.settings.git_path);
+        let github = crate::ui::github::GitHub::new(&cc.egui_ctx, &persisted.settings);
         let mut app = Self {
             repos: persisted.repos.into_iter().filter(|p| p.exists()).collect(),
             tabs: Vec::new(),
@@ -112,6 +121,7 @@ impl GitrApp {
             repo_filter: String::new(),
             git_version: cmd::git_version(),
             logo: load_logo(&cc.egui_ctx),
+            github,
             #[cfg(feature = "screenshot")]
             devshot: crate::devshot::DevShot::from_env(),
         };
@@ -483,7 +493,7 @@ impl GitrApp {
             }
 
             // Center: repository + branch.
-            let right_w = 4.0 * 58.0;
+            let right_w = 5.0 * 58.0;
             let center_w = (ui.available_width() - right_w - 16.0).max(0.0);
             ui.allocate_ui_with_layout(
                 Vec2::new(center_w, 44.0),
@@ -500,6 +510,12 @@ impl GitrApp {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if tool_button(ui, icon::GEAR, "Settings", true, false).clicked() {
                     self.dialog = Some(Dialog::Settings(self.settings.clone()));
+                }
+                if tool_button(ui, icon::GITHUB_LOGO, "Accounts", true, false)
+                    .on_hover_text("GitHub accounts and repositories")
+                    .clicked()
+                {
+                    self.github.open();
                 }
                 if tool_button(ui, icon::TERMINAL_WINDOW, "Terminal", has, false).clicked() {
                     if let Some(t) = tab.as_deref() {
@@ -694,6 +710,14 @@ impl GitrApp {
                     action = Some(2);
                     ui.close();
                 }
+                ui.separator();
+                if ui
+                    .button(format!("{} GitHub Accounts…", icon::GITHUB_LOGO))
+                    .clicked()
+                {
+                    action = Some(3);
+                    ui.close();
+                }
             });
         });
         if let Some(i) = activate {
@@ -711,6 +735,7 @@ impl GitrApp {
             Some(0) => self.pick_and_open(&ctx),
             Some(1) => self.dialog = Some(self.clone_dialog()),
             Some(2) => self.init_repo(&ctx),
+            Some(3) => self.github.open(),
             _ => {}
         }
     }
@@ -830,7 +855,7 @@ impl GitrApp {
             );
             ui.add_space(20.0);
             ui.horizontal(|ui| {
-                let w = 3.0 * 170.0;
+                let w = 4.0 * 170.0;
                 ui.add_space(((ui.available_width() - w) / 2.0).max(0.0));
                 if big_button(ui, icon::FOLDER_OPEN, "Open Repository").clicked() {
                     self.pick_and_open(&ctx);
@@ -840,6 +865,10 @@ impl GitrApp {
                 }
                 if big_button(ui, icon::FOLDER_PLUS, "New Repository").clicked() {
                     self.init_repo(&ctx);
+                }
+                let label = self.github.summary();
+                if big_button(ui, icon::GITHUB_LOGO, &label).clicked() {
+                    self.github.open();
                 }
             });
             ui.add_space(24.0);
@@ -1063,6 +1092,8 @@ impl GitrApp {
                 "tree_file" => tab.load_tree_file(value.to_owned()),
                 "light" => self.settings.theme = ThemeChoice::Light,
                 "home" => self.active = None,
+                "github" => self.github.open(),
+                "github_demo" => self.github.open_demo(),
                 "merge_editor" => {
                     tab.select_change(false, value.to_owned());
                     let _ = tab.open_merge_editor(value);
@@ -1402,6 +1433,19 @@ impl eframe::App for GitrApp {
         for tab in &mut self.tabs {
             crate::ui::file_history::show(&ctx, tab, self.settings.diff_font_size);
         }
+        if let Some(crate::ui::github::Action::Clone { url, name }) =
+            self.github.show(&ctx, &mut self.settings)
+        {
+            let mut dialog = self.clone_dialog();
+            if let Dialog::Clone {
+                url: u, name: n, ..
+            } = &mut dialog
+            {
+                *u = url;
+                *n = name;
+            }
+            self.dialog = Some(dialog);
+        }
         self.toasts(&ctx);
     }
 
@@ -1414,5 +1458,23 @@ impl eframe::App for GitrApp {
             hide_repo_list: !self.show_repo_list,
         };
         eframe::set_value(storage, STORAGE_KEY, &state);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Fields removed from `Settings` must not make previously saved state unreadable.
+    #[test]
+    fn settings_ignore_unknown_and_missing_fields() {
+        // `github_client_id` and `github_clone_ssh` are settings from earlier versions.
+        let saved = r#"(theme: Dark, commit_limit: 500, github_client_id: "Ov23liabc", github_clone_ssh: true)"#;
+        let settings: Settings = ron::from_str(saved).unwrap();
+        assert_eq!(settings.theme, ThemeChoice::Dark);
+        assert_eq!(settings.commit_limit, 500);
+        // The old SSH default does not carry over: cloning defaults to HTTPS.
+        assert!(!settings.github_clone_via_ssh);
+        assert_eq!(settings.zoom, 1.0);
     }
 }

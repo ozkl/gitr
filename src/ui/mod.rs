@@ -3,6 +3,7 @@ pub mod conflict;
 pub mod dialogs;
 pub mod diff_view;
 pub mod file_history;
+pub mod github;
 pub mod history;
 pub mod image_view;
 pub mod sidebar;

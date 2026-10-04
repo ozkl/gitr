@@ -6,6 +6,7 @@ mod askpass;
 mod devshot;
 mod format;
 mod git;
+mod github;
 mod platform;
 mod preview;
 mod repo;
@@ -43,6 +44,7 @@ fn main() -> eframe::Result {
             .unwrap_or_else(|| "Password:".to_owned());
         std::process::exit(askpass::run(prompt));
     }
+    git::cmd::set_config_hook(github::credential_config);
     if let Ok(exe) = std::env::current_exe() {
         git::cmd::set_extra_env(askpass::env_for_git(&exe));
     }

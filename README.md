@@ -31,6 +31,30 @@ confirmation of a new SSH host key), Gitr shows a small dialog. It is registered
 `SSH_ASKPASS` for the git commands it runs. The answer is piped straight back to git; Gitr never
 logs or saves it. Git itself may save working HTTPS credentials in your configured credential helper.
 
+### GitHub
+
+Open **Accounts** in the toolbar (also on the start screen and in the **+** menu) to add GitHub
+accounts and browse and clone their repositories.
+
+Sign-in uses a **personal access token**: create one with the `repo` scope and paste it once.
+You can add several accounts; each token is stored under its GitHub login.
+
+With more than one account, Gitr picks the account for each repository automatically when it runs
+fetch, pull, push or clone on an HTTPS GitHub remote: the account that owns the repository, or
+otherwise the one GitHub says can access it (push access first). It passes that choice to git for
+the command only (`credential.<url>.username`); nothing is written to the repository, and an
+account you configured yourself is respected. SSH remotes authenticate by key and are unaffected.
+
+To pin a repository to an account or an SSH key, use **Repository Settings** (gear on the tab):
+*GitHub account* sets `credential.https://github.com.username`, and *SSH key* sets
+`core.sshCommand` (`ssh -i <key> -o IdentitiesOnly=yes`) in that repository's `.git/config`, so the
+command line and other tools behave the same.
+
+Gitr does not store the token. It is handed to git's credential helper, which keeps it in the
+operating system's secure store (the macOS Keychain, Git Credential Manager on Windows, libsecret on
+Linux), and is read back only for the duration of a request. Signing out removes it from that store.
+Because it is saved the way git expects, HTTPS pushes and pulls to github.com use it too.
+
 ## Build & run
 
 ```bash

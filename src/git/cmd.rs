@@ -8,6 +8,24 @@ use std::sync::OnceLock;
 static GIT_BINARY: OnceLock<String> = OnceLock::new();
 static EXTRA_ENV: OnceLock<Vec<(&'static str, String)>> = OnceLock::new();
 
+/// Supplies extra `-c key=value` options for a command (e.g. which account to authenticate as).
+pub type ConfigHook = fn(&Path, &[&str]) -> Vec<String>;
+static CONFIG_HOOK: OnceLock<ConfigHook> = OnceLock::new();
+
+pub fn set_config_hook(hook: ConfigHook) {
+    let _ = CONFIG_HOOK.set(hook);
+}
+
+/// `base_command` plus per-command options from the config hook, followed by `args`.
+fn command(repo: &Path, args: &[&str]) -> Command {
+    let mut cmd = base_command(repo);
+    if let Some(hook) = CONFIG_HOOK.get() {
+        cmd.args(hook(repo, args));
+    }
+    cmd.args(args);
+    cmd
+}
+
 /// Environment added to every git command (used to route credential prompts to our dialog).
 pub fn set_extra_env(env: Vec<(&'static str, String)>) {
     let _ = EXTRA_ENV.set(env);
@@ -20,7 +38,7 @@ pub fn set_git_binary(path: &str) {
     }
 }
 
-fn git_binary() -> &'static str {
+pub fn git_binary() -> &'static str {
     GIT_BINARY.get().map(String::as_str).unwrap_or("git")
 }
 
@@ -74,8 +92,7 @@ pub fn run(repo: &Path, args: &[&str]) -> Result<String, String> {
 }
 
 pub fn run_full(repo: &Path, args: &[&str]) -> Result<GitOutput, String> {
-    let output = base_command(repo)
-        .args(args)
+    let output = command(repo, args)
         .output()
         .map_err(|e| format!("Failed to run {}: {e}", describe(args)))?;
     let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
@@ -102,8 +119,7 @@ pub fn run_with_input(repo: &Path, args: &[&str], input: &[u8]) -> Result<String
 /// Like [`run_with_input`], returning raw stdout. Input is written from a separate thread so
 /// that commands producing output while reading (check-attr, lfs smudge) cannot deadlock.
 pub fn run_with_input_bytes(repo: &Path, args: &[&str], input: &[u8]) -> Result<Vec<u8>, String> {
-    let mut child = base_command(repo)
-        .args(args)
+    let mut child = command(repo, args)
         .stdin(Stdio::piped())
         .spawn()
         .map_err(|e| format!("Failed to run {}: {e}", describe(args)))?;
@@ -127,8 +143,7 @@ pub fn run_with_input_bytes(repo: &Path, args: &[&str], input: &[u8]) -> Result<
 
 /// Raw bytes of stdout (for file contents that may be binary).
 pub fn run_bytes(repo: &Path, args: &[&str]) -> Result<Vec<u8>, String> {
-    let output = base_command(repo)
-        .args(args)
+    let output = command(repo, args)
         .output()
         .map_err(|e| format!("Failed to run {}: {e}", describe(args)))?;
     if output.status.success() {

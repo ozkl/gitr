@@ -6,7 +6,7 @@ use egui::{Key, RichText};
 
 use crate::app::Settings;
 use crate::git::diff::Selection;
-use crate::git::{FileChange, InheritedConfig, PullMode, RepoConfig};
+use crate::git::{FileChange, InheritedConfig, PullMode, RepoConfig, SshKey};
 use crate::repo::{PatchAction, RepoTab};
 use crate::ui::theme;
 
@@ -96,7 +96,31 @@ pub enum Dialog {
         original: RepoConfig,
         edit: RepoConfig,
         inherited: InheritedConfig,
+        access: RepoAccess,
     },
+}
+
+/// What the Repository Settings dialog needs to offer account and key choices.
+pub struct RepoAccess {
+    /// Signed-in GitHub accounts.
+    accounts: Vec<String>,
+    /// Account Gitr picked automatically for this repository, once known.
+    auto_account: Option<String>,
+    /// Private keys found in `~/.ssh`.
+    ssh_keys: Vec<String>,
+    has_github_https: bool,
+    has_ssh: bool,
+}
+
+/// `~/…` form of a path under the home directory, for display.
+fn short_path(path: &str) -> String {
+    match std::env::home_dir() {
+        Some(home) => match path.strip_prefix(&*home.to_string_lossy()) {
+            Some(rest) => format!("~{rest}"),
+            None => path.to_owned(),
+        },
+        None => path.to_owned(),
+    }
 }
 
 pub enum AppAction {
@@ -136,11 +160,26 @@ impl Dialog {
 
     pub fn repo_settings(tab: &RepoTab) -> Dialog {
         let (config, inherited) = crate::git::load_repo_config(&tab.path);
+        let urls: Vec<&str> = tab.refs.remotes.iter().map(|r| r.url.as_str()).collect();
+        let access = RepoAccess {
+            accounts: crate::github::accounts(),
+            auto_account: urls
+                .iter()
+                .find_map(|u| crate::github::cached_account_for_url(u)),
+            ssh_keys: crate::git::ssh_keys(),
+            has_github_https: urls
+                .iter()
+                .any(|u| crate::github::github_https_repo(u).is_some()),
+            has_ssh: urls
+                .iter()
+                .any(|u| u.starts_with("ssh://") || (!u.contains("://") && u.contains('@'))),
+        };
         Dialog::RepoSettings {
             repo: tab.name.clone(),
             original: config.clone(),
             edit: config,
             inherited,
+            access,
         }
     }
 
@@ -722,9 +761,9 @@ fn body(ui: &mut egui::Ui, dialog: &mut Dialog, tab: Option<&mut RepoTab>) -> Ou
             ui.heading("Clone Repository");
             ui.add_space(6.0);
             grid(ui, "clone", |ui| {
-                ui.label("Repository URL:");
+                ui.label("SSH or HTTPS address:");
                 let before = url.clone();
-                text_field(ui, url, "https://github.com/owner/repo.git", true);
+                text_field(ui, url, "git@host:owner/repo.git or https://…", true);
                 if *url != before {
                     let derived = url.trim().trim_end_matches('/').trim_end_matches(".git");
                     *name = derived
@@ -764,6 +803,7 @@ fn body(ui: &mut egui::Ui, dialog: &mut Dialog, tab: Option<&mut RepoTab>) -> Ou
             original,
             edit,
             inherited,
+            access,
         } => {
             let p = theme::pal(ui);
             ui.heading(format!("Repository Settings — {repo}"));
@@ -849,6 +889,95 @@ fn body(ui: &mut egui::Ui, dialog: &mut Dialog, tab: Option<&mut RepoTab>) -> Ou
                     });
                 ui.end_row();
             });
+            ui.add_space(10.0);
+            ui.label(RichText::new("Remote access").strong());
+            ui.add_space(2.0);
+            grid(ui, "repo_access", |ui| {
+                // Account for HTTPS github.com remotes.
+                ui.label("GitHub account:");
+                let automatic = match &access.auto_account {
+                    Some(login) => format!("Automatic (@{login})"),
+                    None => "Automatic".to_owned(),
+                };
+                let selected = match &edit.github_account {
+                    Some(login) => format!("@{login}"),
+                    None => automatic.clone(),
+                };
+                let mut choices = access.accounts.clone();
+                // Keep an account that is configured but not signed in here.
+                if let Some(current) = &original.github_account {
+                    if !choices.contains(current) {
+                        choices.push(current.clone());
+                    }
+                }
+                ui.add_enabled_ui(!choices.is_empty(), |ui| {
+                    egui::ComboBox::from_id_salt("repo_github_account")
+                        .width(260.0)
+                        .selected_text(selected)
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(&mut edit.github_account, None, automatic);
+                            for login in &choices {
+                                ui.selectable_value(
+                                    &mut edit.github_account,
+                                    Some(login.clone()),
+                                    format!("@{login}"),
+                                );
+                            }
+                        });
+                })
+                .response
+                .on_disabled_hover_text("Sign in to a GitHub account first");
+                ui.end_row();
+
+                // Key for SSH remotes.
+                ui.label("SSH key:");
+                let default = "Default (ssh agent / config)";
+                let selected = match &edit.ssh_key {
+                    SshKey::Default => default.to_owned(),
+                    SshKey::Key(path) => short_path(path),
+                    SshKey::Custom(_) => "Custom ssh command".to_owned(),
+                };
+                egui::ComboBox::from_id_salt("repo_ssh_key")
+                    .width(260.0)
+                    .selected_text(selected)
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(&mut edit.ssh_key, SshKey::Default, default);
+                        for key in &access.ssh_keys {
+                            ui.selectable_value(&mut edit.ssh_key, SshKey::Key(key.clone()), short_path(key));
+                        }
+                        // A key or command already configured that is not in ~/.ssh.
+                        if !matches!(&original.ssh_key, SshKey::Key(k) if access.ssh_keys.contains(k)) && original.ssh_key != SshKey::Default {
+                            let label = match &original.ssh_key {
+                                SshKey::Key(path) => short_path(path),
+                                _ => "Custom ssh command".to_owned(),
+                            };
+                            ui.selectable_value(&mut edit.ssh_key, original.ssh_key.clone(), label);
+                        }
+                    });
+                ui.end_row();
+            });
+            let note = match (access.has_github_https, access.has_ssh) {
+                (true, false) => {
+                    "This repository's GitHub remote uses HTTPS, so the account applies; the SSH key is not used."
+                }
+                (false, true) => {
+                    "This repository's remote uses SSH, so the key applies; the GitHub account is not used."
+                }
+                _ => "The account applies to HTTPS github.com remotes, the key to SSH remotes.",
+            };
+            ui.add(egui::Label::new(RichText::new(note).small().color(p.muted)).wrap());
+            if let SshKey::Custom(command) = &edit.ssh_key {
+                ui.add(
+                    egui::Label::new(
+                        RichText::new(format!("core.sshCommand = {command}"))
+                            .small()
+                            .monospace()
+                            .color(p.muted),
+                    )
+                    .wrap(),
+                );
+            }
+
             ui.add_space(6.0);
             ui.label(
                 RichText::new("Saved in this repository's .git/config (git config --local).")

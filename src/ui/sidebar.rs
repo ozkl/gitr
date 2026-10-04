@@ -195,7 +195,14 @@ pub fn sidebar(ui: &mut egui::Ui, tab: &mut RepoTab, cx: &mut Ctx) {
                             let r = if remote.url.is_empty() {
                                 r.on_hover_text("No URL configured")
                             } else {
-                                r.on_hover_text(&remote.url)
+                                // Show which signed-in GitHub account this remote uses, once known.
+                                match crate::github::cached_account_for_url(&remote.url) {
+                                    Some(login) => r.on_hover_text(format!(
+                                        "{}\nGitHub account: @{login}",
+                                        remote.url
+                                    )),
+                                    None => r.on_hover_text(&remote.url),
+                                }
                             };
                             r.context_menu(|ui| {
                                 remote_menu(ui, tab, cx, &remote.name, &remote.url)

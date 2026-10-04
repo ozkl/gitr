@@ -842,6 +842,75 @@ pub struct RepoConfig {
     pub user_email: String,
     pub pull: PullMode,
     pub prune: Option<bool>,
+    /// GitHub login to authenticate as for this repository's HTTPS github.com remotes.
+    pub github_account: Option<String>,
+    pub ssh_key: SshKey,
+}
+
+/// Config key pinning the GitHub account for a repository.
+const GITHUB_ACCOUNT_KEY: &str = "credential.https://github.com.username";
+
+/// Which SSH key a repository uses (`core.sshCommand`).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum SshKey {
+    /// Whatever ssh picks: the agent, `~/.ssh/config`, default key files.
+    #[default]
+    Default,
+    /// Only this private key file.
+    Key(String),
+    /// A `core.sshCommand` Gitr did not write; left untouched.
+    Custom(String),
+}
+
+impl SshKey {
+    const PREFIX: &'static str = "ssh -i ";
+    const SUFFIX: &'static str = " -o IdentitiesOnly=yes";
+
+    pub fn from_config(value: Option<&str>) -> SshKey {
+        let Some(value) = value.map(str::trim).filter(|v| !v.is_empty()) else {
+            return SshKey::Default;
+        };
+        let key = value
+            .strip_prefix(Self::PREFIX)
+            .and_then(|v| v.strip_suffix(Self::SUFFIX))
+            .and_then(|v| v.strip_prefix('\'')?.strip_suffix('\''))
+            // A quote inside the path means it was escaped; keep such commands as custom.
+            .filter(|path| !path.contains('\''));
+        match key {
+            Some(path) => SshKey::Key(path.to_owned()),
+            None => SshKey::Custom(value.to_owned()),
+        }
+    }
+
+    /// The `core.sshCommand` value, or `None` to leave it unset.
+    pub fn to_config(&self) -> Option<String> {
+        match self {
+            SshKey::Default => None,
+            // `IdentitiesOnly` stops ssh from offering other keys from the agent first.
+            SshKey::Key(path) => Some(format!("{}'{path}'{}", Self::PREFIX, Self::SUFFIX)),
+            SshKey::Custom(command) => Some(command.clone()),
+        }
+    }
+}
+
+/// Private keys in `~/.ssh` (files that have a matching `.pub`), as absolute paths.
+pub fn ssh_keys() -> Vec<String> {
+    let Some(dir) = std::env::home_dir().map(|h| h.join(".ssh")) else {
+        return Vec::new();
+    };
+    let mut keys: Vec<String> = std::fs::read_dir(&dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|e| e == "pub"))
+        .map(|p| p.with_extension(""))
+        // Paths with a quote cannot be written safely into the ssh command.
+        .filter(|p| p.is_file() && !p.to_string_lossy().contains('\''))
+        .map(|p| p.to_string_lossy().into_owned())
+        .collect();
+    keys.sort();
+    keys
 }
 
 /// Values that apply when the repository does not override them (global / system config).
@@ -871,6 +940,8 @@ pub fn load_repo_config(repo: &Path) -> (RepoConfig, InheritedConfig) {
         user_email: local("user.email").unwrap_or_default(),
         pull: PullMode::from_config(local("pull.rebase").as_deref(), local("pull.ff").as_deref()),
         prune: local("fetch.prune").map(|v| v == "true"),
+        github_account: local(GITHUB_ACCOUNT_KEY),
+        ssh_key: SshKey::from_config(local("core.sshCommand").as_deref()),
     };
     let pull = match PullMode::from_config(
         inherited(repo, "pull.rebase").as_deref(),
@@ -938,6 +1009,25 @@ pub fn save_repo_config(repo: &Path, old: &RepoConfig, new: &RepoConfig) -> Resu
             Some(v) => set("fetch.prune", if v { "true" } else { "false" })?,
         }
         changed.push("fetch.prune");
+    }
+    if old.github_account != new.github_account {
+        match new
+            .github_account
+            .as_deref()
+            .map(str::trim)
+            .filter(|a| !a.is_empty())
+        {
+            Some(login) => set(GITHUB_ACCOUNT_KEY, login)?,
+            None => unset(GITHUB_ACCOUNT_KEY)?,
+        }
+        changed.push("GitHub account");
+    }
+    if old.ssh_key != new.ssh_key {
+        match new.ssh_key.to_config() {
+            Some(command) => set("core.sshCommand", &command)?,
+            None => unset("core.sshCommand")?,
+        }
+        changed.push("SSH key");
     }
     Ok(if changed.is_empty() {
         "No changes".into()
@@ -1063,6 +1153,8 @@ mod tests {
             user_email: "ada@example.com".into(),
             pull: PullMode::FastForwardOnly,
             prune: Some(true),
+            github_account: Some("work-alp".into()),
+            ssh_key: SshKey::Key("/Users/ada/.ssh/id work".into()),
         };
         save_repo_config(&dir, &initial, &new).unwrap();
         assert_eq!(load_repo_config(&dir).0, new);
@@ -1070,6 +1162,21 @@ mod tests {
             config_at(&dir, "--local", "pull.ff").as_deref(),
             Some("only")
         );
+        assert_eq!(
+            config_at(&dir, "--local", "core.sshCommand").as_deref(),
+            Some("ssh -i '/Users/ada/.ssh/id work' -o IdentitiesOnly=yes")
+        );
+        // git resolves the pinned account for any github.com URL in this repository.
+        let account = cmd::run(
+            &dir,
+            &[
+                "config",
+                "--get-urlmatch",
+                "credential.username",
+                "https://github.com/acme/tool.git",
+            ],
+        );
+        assert_eq!(account.unwrap().trim(), "work-alp");
 
         // Clearing returns to inherited values.
         save_repo_config(&dir, &new, &initial).unwrap();
@@ -1117,5 +1224,29 @@ mod tests {
             (ChangeKind::Added, "old.txt")
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn ssh_key_config_round_trip() {
+        assert_eq!(SshKey::from_config(None), SshKey::Default);
+        assert_eq!(SshKey::from_config(Some("  ")), SshKey::Default);
+        let key = SshKey::Key("/home/ada/.ssh/id_ed25519".into());
+        let command = key.to_config().unwrap();
+        assert_eq!(
+            command,
+            "ssh -i '/home/ada/.ssh/id_ed25519' -o IdentitiesOnly=yes"
+        );
+        assert_eq!(SshKey::from_config(Some(&command)), key);
+        // Commands Gitr did not write are preserved as they are.
+        let custom = "ssh -p 2222 -o StrictHostKeyChecking=no";
+        assert_eq!(
+            SshKey::from_config(Some(custom)),
+            SshKey::Custom(custom.into())
+        );
+        assert_eq!(
+            SshKey::Custom(custom.into()).to_config().as_deref(),
+            Some(custom)
+        );
+        assert_eq!(SshKey::Default.to_config(), None);
     }
 }
