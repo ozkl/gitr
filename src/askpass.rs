@@ -178,6 +178,7 @@ pub fn run(prompt: String) -> i32 {
     let height = if kind == Kind::YesNo { 230.0 } else { 220.0 };
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
+            .with_icon(eframe::icon_data::from_png_bytes(crate::ICON_PNG).unwrap_or_default())
             .with_title("Gitr — Authentication")
             .with_inner_size([480.0, height])
             .with_resizable(false)

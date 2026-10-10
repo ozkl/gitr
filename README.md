@@ -88,6 +88,24 @@ Restart Gitr after installing; you can launch it from your application menu.
 The bundle is ad-hoc signed; set `SIGN_IDENTITY` to a Developer ID identity (and notarize) to
 distribute it. The icon comes from `assets/icon-1024.png`, rendered from `assets/logo.svg`.
 
+### Windows executable
+
+Build on Windows with the Rust MSVC toolchain and Visual Studio Build Tools
+(including the Windows SDK):
+
+```powershell
+cargo build --release
+```
+
+`target/release/gitr.exe` includes the icon resource for Explorer and shortcuts.
+App windows also use the embedded PNG icon, including authentication dialogs.
+The build script compiles `assets/gitr.ico` with the Windows resource compiler.
+To regenerate its sizes after changing the artwork, use ImageMagick:
+
+```bash
+magick assets/icon-256.png -define icon:auto-resize=256,128,64,48,32,16 assets/gitr.ico
+```
+
 ## Keyboard shortcuts
 
 | Shortcut | Action |

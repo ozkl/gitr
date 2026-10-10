@@ -23,3 +23,6 @@ screenshot = []
 
 [dev-dependencies]
 ron = "0.12"
+
+[build-dependencies]
+winresource = { version = "0.1.31", default-features = false }
