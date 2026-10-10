@@ -4,7 +4,8 @@ A fast, native Git client written in Rust with [egui](https://github.com/emilk/e
 Runs on macOS, Windows and Linux. It drives the installed `git`
 executable, so it behaves exactly like git on the command line (hooks, credential helpers, config).
 
-Inspired by Sourcetree and Fork.
+
+![Gitr showing a repository's commit graph and commit details](assets/screenshot.png)
 
 ## Features
 
