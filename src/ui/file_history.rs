@@ -16,6 +16,7 @@ pub fn show(ctx: &egui::Context, tab: &mut RepoTab, font_size: f32) {
     let title = format!("History — {}", h.path);
     let id = egui::ViewportId::from_hash_of(("file_history", &tab.path));
     let builder = egui::ViewportBuilder::default()
+        .with_app_id("gitr")
         .with_title(title)
         .with_inner_size([1100.0, 720.0])
         .with_min_inner_size([600.0, 360.0])
