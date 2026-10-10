@@ -11,6 +11,7 @@ mod platform;
 mod preview;
 mod repo;
 mod ui;
+mod workspace;
 
 /// App icon (rendered from `assets/logo.svg`).
 pub const ICON_PNG: &[u8] = include_bytes!("../assets/icon-256.png");

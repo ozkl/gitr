@@ -9,6 +9,8 @@ Inspired by Sourcetree and Fork.
 ## Features
 
 - **Repository manager**: saved repositories, tabs, drag and drop a folder to open it, clone, init
+- **Workspaces**: named sets of repositories (e.g. Home, Work), each with its own repository
+  list and open tabs; switch from the toolbar
 - **Commit graph**: colored lanes, branch/tag badges, search by message, author, SHA or ref,
   and keyboard navigation
 - **Commit details**: author/committer, refs, parents, message, inline diffs (Commit tab), a file

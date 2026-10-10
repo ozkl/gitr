@@ -250,16 +250,32 @@ pub fn commit_list(ui: &mut egui::Ui, tab: &mut RepoTab, cx: &mut Ctx) {
                 }
             }
 
-            // Message with ref badges.
+            // Message with ref badges. Commits outside the checked-out history are dimmed;
+            // the checked-out commit itself is bold.
+            let current = tab.in_head.get(ci).copied().unwrap_or(true);
             let text_col = if selected {
                 p.selection_text
-            } else {
+            } else if current {
                 text_color
+            } else {
+                p.muted
             };
             let muted = if selected {
                 p.selection_text.gamma_multiply(0.85)
-            } else {
+            } else if current {
                 p.muted
+            } else {
+                p.line_no
+            };
+            // The bundled fonts have no bold weight; draw twice with a slight offset.
+            let bold = |painter: &egui::Painter,
+                        pos: Pos2,
+                        galley: std::sync::Arc<egui::Galley>,
+                        color: Color32| {
+                if is_head {
+                    painter.galley(pos + Vec2::new(0.6, 0.0), galley.clone(), color);
+                }
+                painter.galley(pos, galley, color);
             };
             let msg_right = if show_right {
                 rect.right() - right_cols
@@ -285,7 +301,8 @@ pub fn commit_list(ui: &mut egui::Ui, tab: &mut RepoTab, cx: &mut Ctx) {
                 FontId::proportional(13.5),
                 text_col,
             );
-            ui.painter().with_clip_rect(clip).galley(
+            bold(
+                &ui.painter().with_clip_rect(clip),
                 Pos2::new(x, rect.center().y - galley.size().y / 2.0),
                 galley,
                 text_col,
@@ -299,13 +316,9 @@ pub fn commit_list(ui: &mut egui::Ui, tab: &mut RepoTab, cx: &mut Ctx) {
                             Pos2::new(x, rect.top()),
                             Pos2::new(x + w - 8.0, rect.bottom()),
                         );
-                        ui.painter().with_clip_rect(r).text(
-                            Pos2::new(x, rect.center().y),
-                            Align2::LEFT_CENTER,
-                            text,
-                            font,
-                            color,
-                        );
+                        let galley = ui.painter().layout_no_wrap(text.to_owned(), font, color);
+                        let pos = Pos2::new(x, rect.center().y - galley.size().y / 2.0);
+                        bold(&ui.painter().with_clip_rect(r), pos, galley, color);
                     };
                 clip_text(
                     ui,
@@ -472,7 +485,8 @@ fn paint_badge(ui: &egui::Ui, badge: &Badge, left_center: Pos2, max_x: f32, lane
     let (fill, stroke) = match badge.kind {
         RefKind::Tag => (p.badge_bg, p.tag),
         RefKind::RemoteBranch => (p.badge_bg, p.badge_border),
-        _ if badge.is_head => (lane.gamma_multiply(0.35), lane),
+        // Opaque, so the badge reads the same on a selected (blue) row.
+        _ if badge.is_head => (theme::mix(ui.visuals().panel_fill, lane, 0.35), lane),
         _ => (p.badge_bg, lane.gamma_multiply(0.8)),
     };
     ui.painter().rect(
@@ -601,8 +615,9 @@ fn commit_menu(ui: &mut egui::Ui, tab: &mut RepoTab, cx: &mut Ctx, id: &str) {
             .button(format!("{} Merge commit into '{head}'…", icon::GIT_MERGE))
             .clicked()
     {
+        // A shortened id keeps git's "Merge commit '…'" message readable.
         *cx.dialog = Some(Dialog::Merge {
-            source: id.to_owned(),
+            source: id[..id.len().min(12)].to_owned(),
             no_ff: false,
             squash: false,
         });
@@ -854,7 +869,7 @@ fn file_row(ui: &mut egui::Ui, file: &FileChange, selected: bool, lfs: bool) -> 
     let mut job = egui::text::LayoutJob::default();
     if let Some(old) = &file.old_path {
         job.append(
-            &format!("{old} → "),
+            &format!("{old} {} ", icon::ARROW_RIGHT),
             0.0,
             egui::TextFormat {
                 color: muted,

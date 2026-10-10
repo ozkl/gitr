@@ -14,6 +14,7 @@ use crate::git::{self, cmd};
 use crate::repo::{RepoTab, View};
 use crate::ui::dialogs::{self, AppAction, Dialog, Outcome};
 use crate::ui::{Ctx, changes, history, sidebar, theme};
+use crate::workspace::Workspace;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ThemeChoice {
@@ -60,11 +61,17 @@ impl Default for Settings {
 #[derive(Default, Serialize, Deserialize)]
 #[serde(default)]
 struct Persisted {
-    repos: Vec<PathBuf>,
-    open_tabs: Vec<PathBuf>,
-    active_tab: Option<usize>,
+    workspaces: Vec<Workspace>,
+    current_workspace: usize,
     settings: Settings,
     hide_repo_list: bool,
+    // State of versions without workspaces; read once to build the "Home" workspace.
+    #[serde(skip_serializing)]
+    repos: Vec<PathBuf>,
+    #[serde(skip_serializing)]
+    open_tabs: Vec<PathBuf>,
+    #[serde(skip_serializing)]
+    active_tab: Option<usize>,
 }
 
 const STORAGE_KEY: &str = "gitr_state";
@@ -82,6 +89,11 @@ struct PendingClone {
 }
 
 pub struct GitrApp {
+    /// All workspaces. The current one's entry is refreshed from the live state below
+    /// when switching or saving.
+    workspaces: Vec<Workspace>,
+    workspace: usize,
+    /// Repositories, tabs and active tab of the current workspace.
     repos: Vec<PathBuf>,
     tabs: Vec<RepoTab>,
     active: Option<usize>,
@@ -113,8 +125,17 @@ impl GitrApp {
         cmd::set_git_binary(&persisted.settings.git_path);
         cmd::set_ssh_program(&persisted.settings.ssh_path);
         let github = crate::ui::github::GitHub::new(&cc.egui_ctx, &persisted.settings);
+        let (workspaces, workspace) = crate::workspace::load(
+            persisted.workspaces,
+            persisted.current_workspace,
+            persisted.repos,
+            persisted.open_tabs,
+            persisted.active_tab,
+        );
         let mut app = Self {
-            repos: persisted.repos.into_iter().filter(|p| p.exists()).collect(),
+            workspaces,
+            workspace,
+            repos: Vec::new(),
             tabs: Vec::new(),
             active: None,
             settings: persisted.settings,
@@ -145,22 +166,62 @@ impl GitrApp {
                 true,
             );
         }
-        for path in persisted.open_tabs.iter().filter(|p| p.exists()) {
-            app.tabs.push(RepoTab::open(
-                path.clone(),
-                cc.egui_ctx.clone(),
-                app.settings.commit_limit,
-            ));
-        }
-        app.active = persisted
-            .active_tab
-            .filter(|&i| i < app.tabs.len())
-            .or(if app.tabs.is_empty() { None } else { Some(0) });
+        app.load_workspace(&cc.egui_ctx);
         // Command-line argument: open a repository.
         if let Some(arg) = std::env::args().nth(1) {
             app.open_repo(&cc.egui_ctx, Path::new(&arg));
         }
         app
+    }
+
+    /// Copies the live repositories and tabs into the current workspace's entry.
+    fn store_workspace(&mut self) {
+        let ws = &mut self.workspaces[self.workspace];
+        ws.repos = self.repos.clone();
+        ws.open_tabs = self.tabs.iter().map(|t| t.path.clone()).collect();
+        ws.active_tab = self.active;
+    }
+
+    /// Replaces the live repositories and tabs with the current workspace's.
+    fn load_workspace(&mut self, ctx: &egui::Context) {
+        let ws = self.workspaces[self.workspace].clone();
+        self.repos = ws.repos.into_iter().filter(|p| p.exists()).collect();
+        self.tabs = ws
+            .open_tabs
+            .iter()
+            .filter(|p| p.exists())
+            .map(|p| RepoTab::open(p.clone(), ctx.clone(), self.settings.commit_limit))
+            .collect();
+        self.active = ws
+            .active_tab
+            .filter(|&i| i < self.tabs.len())
+            .or(if self.tabs.is_empty() { None } else { Some(0) });
+        self.repo_filter.clear();
+    }
+
+    fn switch_workspace(&mut self, ctx: &egui::Context, index: usize) {
+        if index == self.workspace || index >= self.workspaces.len() {
+            return;
+        }
+        self.store_workspace();
+        self.workspace = index;
+        self.load_workspace(ctx);
+    }
+
+    /// Applies the Configure Workspaces dialog.
+    fn configure_workspaces(&mut self, ctx: &egui::Context, edits: Vec<crate::workspace::Edit>) {
+        self.store_workspace();
+        let kept = edits
+            .iter()
+            .any(|(source, _)| *source == Some(self.workspace));
+        let (workspaces, current) =
+            crate::workspace::apply_edits(&self.workspaces, self.workspace, &edits);
+        self.workspaces = workspaces;
+        self.workspace = current;
+        if !kept {
+            // The workspace that was open is gone: show the one that became current.
+            self.load_workspace(ctx);
+        }
     }
 
     fn apply_settings(&self, ctx: &egui::Context) {
@@ -197,9 +258,9 @@ impl GitrApp {
                 return;
             }
         };
-        if !self.repos.contains(&root) {
-            self.repos.push(root.clone());
-        }
+        // Keep the recents list ordered by last use.
+        self.repos.retain(|p| *p != root);
+        self.repos.push(root.clone());
         if let Some(i) = self.tabs.iter().position(|t| t.path == root) {
             self.active = Some(i);
             return;
@@ -281,6 +342,7 @@ impl GitrApp {
     fn handle_app_action(&mut self, ctx: &egui::Context, action: AppAction) {
         match action {
             AppAction::Clone { url, dest } => self.start_clone(ctx, url, dest),
+            AppAction::SaveWorkspaces(edits) => self.configure_workspaces(ctx, edits),
             AppAction::SaveSettings(s) => {
                 let limit_changed = s.commit_limit != self.settings.commit_limit;
                 self.settings = s;
@@ -424,6 +486,8 @@ impl GitrApp {
 
     fn toolbar(&mut self, ui: &mut egui::Ui) {
         let p = theme::pal(ui);
+        // Applied after the toolbar is drawn (it borrows the active tab).
+        let mut pending_workspace: Option<usize> = None;
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 2.0;
             if tool_button(ui, icon::SIDEBAR_SIMPLE, "Repos", true, self.show_repo_list)
@@ -453,7 +517,7 @@ impl GitrApp {
                 has && has_remote,
                 false,
             )
-            .on_hover_text("Fetch all remotes (⇧⌘F)")
+            .on_hover_text("Fetch all remotes (Shift+⌘/Ctrl+F)")
             .clicked()
             {
                 if let Some(t) = tab.as_deref_mut() {
@@ -461,7 +525,7 @@ impl GitrApp {
                 }
             }
             if tool_button(ui, icon::ARROW_DOWN, "Pull", has && has_remote, false)
-                .on_hover_text("Pull (⇧⌘L)")
+                .on_hover_text("Pull (Shift+⌘/Ctrl+L)")
                 .clicked()
             {
                 if let Some(t) = tab.as_deref() {
@@ -475,7 +539,7 @@ impl GitrApp {
                 has && has_remote && has_head,
                 false,
             )
-            .on_hover_text("Push (⇧⌘P)")
+            .on_hover_text("Push (Shift+⌘/Ctrl+P)")
             .clicked()
             {
                 if let Some(t) = tab.as_deref() {
@@ -501,7 +565,7 @@ impl GitrApp {
             }
 
             // Center: repository + branch.
-            let right_w = 5.0 * 58.0;
+            let right_w = 6.0 * 58.0;
             let center_w = (ui.available_width() - right_w - 16.0).max(0.0);
             ui.allocate_ui_with_layout(
                 Vec2::new(center_w, 44.0),
@@ -518,6 +582,44 @@ impl GitrApp {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if tool_button(ui, icon::GEAR, "Settings", true, false).clicked() {
                     self.dialog = Some(Dialog::Settings(self.settings.clone()));
+                }
+                // Workspace switcher: the button shows the current workspace.
+                let name = self.workspaces[self.workspace].name.clone();
+                let label = if name.chars().count() > 9 {
+                    format!("{}…", name.chars().take(8).collect::<String>())
+                } else {
+                    name.clone()
+                };
+                let ws_button = tool_button(ui, icon::BROWSERS, &label, true, false)
+                    .on_hover_text(format!("Workspace: {name}"));
+                let mut switch_to = None;
+                let mut configure = false;
+                egui::Popup::menu(&ws_button).show(|ui| {
+                    ui.set_min_width(180.0);
+                    ui.label(RichText::new("Workspaces:").small().color(p.muted));
+                    ui.separator();
+                    for (i, ws) in self.workspaces.iter().enumerate() {
+                        let mark = if i == self.workspace {
+                            icon::CHECK
+                        } else {
+                            "    "
+                        };
+                        if ui.button(format!("{mark} {}", ws.name)).clicked() {
+                            switch_to = Some(i);
+                            ui.close();
+                        }
+                    }
+                    ui.separator();
+                    if ui.button("Configure…").clicked() {
+                        configure = true;
+                        ui.close();
+                    }
+                });
+                if let Some(i) = switch_to {
+                    pending_workspace = Some(i);
+                }
+                if configure {
+                    self.dialog = Some(Dialog::workspaces(&self.workspaces));
                 }
                 if tool_button(ui, icon::GITHUB_LOGO, "Accounts", true, false)
                     .on_hover_text("GitHub accounts and repositories")
@@ -545,7 +647,7 @@ impl GitrApp {
                     has && tab.as_ref().is_some_and(|t| t.refs.head_id.is_some()),
                     false,
                 )
-                .on_hover_text("Create branch (⇧⌘B)")
+                .on_hover_text("Create branch (Shift+⌘/Ctrl+B)")
                 .clicked()
                 {
                     if let Some(t) = tab.as_deref() {
@@ -566,6 +668,10 @@ impl GitrApp {
                 }
             });
         });
+        if let Some(index) = pending_workspace {
+            let ctx = ui.ctx().clone();
+            self.switch_workspace(&ctx, index);
+        }
     }
 
     fn tab_bar(&mut self, ui: &mut egui::Ui) {
@@ -748,6 +854,7 @@ impl GitrApp {
         }
     }
 
+    /// The open repositories of the current workspace (the same set as the tabs).
     fn repo_list(&mut self, ui: &mut egui::Ui) {
         let p = theme::pal(ui);
         ui.add_space(8.0);
@@ -771,78 +878,97 @@ impl GitrApp {
         );
         ui.add_space(4.0);
         let filter = self.repo_filter.to_lowercase();
-        let mut open = None;
-        let mut remove = None;
+        let mut activate = None;
+        let mut close = None;
+        let mut settings = None;
         egui::ScrollArea::vertical()
             .auto_shrink(false)
             .show(ui, |ui| {
                 ui.spacing_mut().item_spacing.y = 1.0;
-                for (i, path) in self.repos.iter().enumerate() {
-                    let name = path
-                        .file_name()
-                        .map(|n| n.to_string_lossy().into_owned())
-                        .unwrap_or_default();
-                    if !filter.is_empty() && !name.to_lowercase().contains(&filter) {
+                if self.tabs.is_empty() {
+                    ui.add_space(8.0);
+                    ui.label(RichText::new("No open repositories").color(p.muted));
+                }
+                for (i, tab) in self.tabs.iter().enumerate() {
+                    if !filter.is_empty() && !tab.name.to_lowercase().contains(&filter) {
                         continue;
                     }
-                    let active = self
-                        .active
-                        .and_then(|a| self.tabs.get(a))
-                        .is_some_and(|t| t.path == *path);
-                    let is_open = self.tabs.iter().any(|t| t.path == *path);
+                    let active = self.active == Some(i);
                     let (rect, resp) = ui
                         .allocate_exact_size(Vec2::new(ui.available_width(), 26.0), Sense::click());
                     if active {
-                        ui.painter()
-                            .rect_filled(rect, 5.0, p.hover.gamma_multiply(1.4));
-                    } else if resp.hovered() {
+                        // A step stronger than hover: lighter on dark, darker on light.
+                        let fill = if ui.visuals().dark_mode {
+                            p.hover.gamma_multiply(1.4)
+                        } else {
+                            p.border
+                        };
+                        ui.painter().rect_filled(rect, 5.0, fill);
+                    } else if resp.hovered() || resp.context_menu_opened() {
                         ui.painter().rect_filled(rect, 5.0, p.hover);
                     }
-                    if is_open {
+                    // A dot marks repositories with uncommitted changes.
+                    if !tab.status.is_clean() {
                         ui.painter().circle_filled(
                             Pos2::new(rect.left() + 8.0, rect.center().y),
                             3.0,
                             p.muted,
                         );
                     }
-                    ui.painter().text(
+                    ui.painter().with_clip_rect(rect).text(
                         Pos2::new(rect.left() + 18.0, rect.center().y),
                         Align2::LEFT_CENTER,
-                        &name,
+                        &tab.name,
                         FontId::proportional(14.0),
                         ui.visuals().text_color(),
                     );
-                    let resp = resp.on_hover_text(path.display().to_string());
+                    let changes = tab.status.total();
+                    let hint = if changes == 0 {
+                        tab.path.display().to_string()
+                    } else {
+                        format!(
+                            "{}\n{changes} uncommitted change{}",
+                            tab.path.display(),
+                            if changes == 1 { "" } else { "s" }
+                        )
+                    };
+                    let resp = resp.on_hover_text(hint);
                     if resp.clicked() {
-                        open = Some(path.clone());
+                        activate = Some(i);
+                    }
+                    if resp.middle_clicked() {
+                        close = Some(i);
                     }
                     resp.context_menu(|ui| {
-                        if ui.button("Open").clicked() {
-                            open = Some(path.clone());
-                            ui.close();
-                        }
-                        if ui.button("Show in file manager").clicked() {
-                            crate::platform::reveal(path);
-                            ui.close();
-                        }
-                        if ui.button("Open in terminal").clicked() {
-                            crate::platform::open_terminal(path);
+                        if ui.button("Close").clicked() {
+                            close = Some(i);
                             ui.close();
                         }
                         ui.separator();
-                        if ui.button("Remove from list").clicked() {
-                            remove = Some(i);
+                        if ui.button("Show in file manager").clicked() {
+                            crate::platform::reveal(&tab.path);
+                            ui.close();
+                        }
+                        if ui.button("Open in terminal").clicked() {
+                            crate::platform::open_terminal(&tab.path);
+                            ui.close();
+                        }
+                        if ui.button("Repository Settings…").clicked() {
+                            settings = Some(i);
                             ui.close();
                         }
                     });
                 }
             });
-        let ctx = ui.ctx().clone();
-        if let Some(p) = open {
-            self.open_repo(&ctx, &p);
+        if let Some(i) = activate {
+            self.active = Some(i);
         }
-        if let Some(i) = remove {
-            self.repos.remove(i);
+        if let Some(i) = settings {
+            self.active = Some(i);
+            self.dialog = Some(Dialog::repo_settings(&self.tabs[i]));
+        }
+        if let Some(i) = close {
+            self.close_tab(i);
         }
     }
 
@@ -884,7 +1010,9 @@ impl GitrApp {
                 ui.label(RichText::new("Recent").strong().color(p.muted));
                 ui.add_space(4.0);
                 let mut open = None;
-                for path in self.repos.iter().rev().take(10) {
+                let mut forget = None;
+                // Most recently used first; opening a repository moves it to the end.
+                for path in self.repos.iter().rev().take(12) {
                     let name = path
                         .file_name()
                         .map(|n| n.to_string_lossy().into_owned())
@@ -897,6 +1025,19 @@ impl GitrApp {
                     if r.clicked() {
                         open = Some(path.clone());
                     }
+                    r.context_menu(|ui| {
+                        if ui.button("Show in file manager").clicked() {
+                            crate::platform::reveal(path);
+                            ui.close();
+                        }
+                        if ui.button("Remove from Recent").clicked() {
+                            forget = Some(path.clone());
+                            ui.close();
+                        }
+                    });
+                }
+                if let Some(path) = forget {
+                    self.repos.retain(|p| *p != path);
                 }
                 if let Some(path) = open {
                     self.open_repo(&ctx, &path);
@@ -933,7 +1074,10 @@ impl GitrApp {
                 if let Some(branch) = tab.refs.head_upstream() {
                     if let Some(up) = &branch.upstream {
                         ui.separator();
-                        ui.label(RichText::new(format!("{} → {up}", branch.name)).color(p.muted));
+                        ui.label(
+                            RichText::new(format!("{} {} {up}", branch.name, icon::ARROW_RIGHT))
+                                .color(p.muted),
+                        );
                     }
                 }
             }
@@ -1098,8 +1242,16 @@ impl GitrApp {
                     .then_some(())
                     .unwrap_or(()),
                 "tree_file" => tab.load_tree_file(value.to_owned()),
-                "light" => self.settings.theme = ThemeChoice::Light,
+                "light" => {}
                 "home" => self.active = None,
+                "workspaces_demo" => {
+                    for name in ["Work", "Open Source"] {
+                        self.workspaces.push(Workspace {
+                            name: name.to_owned(),
+                            ..Default::default()
+                        });
+                    }
+                }
                 "github" => self.github.open(),
                 "github_demo" => self.github.open_demo(),
                 "merge_editor" => {
@@ -1137,6 +1289,7 @@ impl GitrApp {
                         "push" => Dialog::push(tab),
                         "pull" => Dialog::pull(tab),
                         "settings" => Dialog::Settings(self.settings.clone()),
+                        "workspaces" => Dialog::workspaces(&self.workspaces),
                         "repo_settings" => Dialog::repo_settings(tab),
                         "edit_remote" => {
                             let r = tab.refs.remotes.first().cloned().expect("a remote");
@@ -1317,6 +1470,9 @@ impl eframe::App for GitrApp {
         {
             self.devshot.tick(&ctx);
             self.apply_dev_actions();
+            if self.devshot.actions.iter().any(|a| a == "light") {
+                ctx.set_theme(egui::ThemePreference::Light);
+            }
         }
 
         // Drag & drop folders to open them.
@@ -1463,12 +1619,13 @@ impl eframe::App for GitrApp {
     }
 
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
+        self.store_workspace();
         let state = Persisted {
-            repos: self.repos.clone(),
-            open_tabs: self.tabs.iter().map(|t| t.path.clone()).collect(),
-            active_tab: self.active,
+            workspaces: self.workspaces.clone(),
+            current_workspace: self.workspace,
             settings: self.settings.clone(),
             hide_repo_list: !self.show_repo_list,
+            ..Default::default()
         };
         eframe::set_value(storage, STORAGE_KEY, &state);
     }
@@ -1489,5 +1646,39 @@ mod tests {
         // The old SSH default does not carry over: cloning defaults to HTTPS.
         assert!(!settings.github_clone_via_ssh);
         assert_eq!(settings.zoom, 1.0);
+    }
+
+    /// State saved before workspaces existed loads as a single "Home" workspace, and the
+    /// new format round-trips.
+    #[test]
+    fn persisted_state_migrates_to_workspaces() {
+        let legacy = r#"(repos: ["/code/a", "/code/b"], open_tabs: ["/code/b"], active_tab: Some(0), hide_repo_list: true)"#;
+        let old: Persisted = ron::from_str(legacy).unwrap();
+        assert!(old.hide_repo_list);
+        let (workspaces, current) = crate::workspace::load(
+            old.workspaces,
+            old.current_workspace,
+            old.repos,
+            old.open_tabs,
+            old.active_tab,
+        );
+        assert_eq!((workspaces.len(), current), (1, 0));
+        assert_eq!(workspaces[0].name, "Home");
+        assert_eq!(workspaces[0].repos.len(), 2);
+
+        let mut work = workspaces[0].clone();
+        work.name = "Work".into();
+        let state = Persisted {
+            workspaces: vec![workspaces[0].clone(), work],
+            current_workspace: 1,
+            ..Default::default()
+        };
+        let text = ron::to_string(&state).unwrap();
+        assert!(!text.contains("open_tabs:[]") || text.contains("workspaces"));
+        let back: Persisted = ron::from_str(&text).unwrap();
+        assert_eq!(back.workspaces, state.workspaces);
+        assert_eq!(back.current_workspace, 1);
+        // The pre-workspace fields are no longer written.
+        assert!(back.repos.is_empty() && back.open_tabs.is_empty());
     }
 }

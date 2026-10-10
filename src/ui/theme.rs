@@ -5,21 +5,31 @@ use egui::{Color32, FontFamily, FontId, Visuals};
 pub const ROW_HEIGHT: f32 = 24.0;
 pub const LANE_WIDTH: f32 = 14.0;
 
-const LANES: [Color32; 10] = [
-    Color32::from_rgb(0xf5, 0x9e, 0x0b), // amber
-    Color32::from_rgb(0x3b, 0x82, 0xf6), // blue
+/// Graph lane colors. No blues: they would clash with the blue row selection.
+const LANES: [Color32; 8] = [
+    Color32::from_rgb(0xf5, 0x9e, 0x0b), // amber (the first lane, usually the main line)
     Color32::from_rgb(0x22, 0xc5, 0x5e), // green
     Color32::from_rgb(0xa8, 0x55, 0xf7), // purple
     Color32::from_rgb(0xef, 0x44, 0x44), // red
-    Color32::from_rgb(0x06, 0xb6, 0xd4), // cyan
+    Color32::from_rgb(0x14, 0xb8, 0xa6), // teal
     Color32::from_rgb(0xec, 0x48, 0x99), // pink
-    Color32::from_rgb(0x84, 0xcc, 0x16), // lime
-    Color32::from_rgb(0xf9, 0x73, 0x16), // orange
-    Color32::from_rgb(0x63, 0x66, 0xf1), // indigo
+    Color32::from_rgb(0xa3, 0xe6, 0x35), // lime
+    Color32::from_rgb(0xc0, 0x84, 0x57), // brown
 ];
 
+/// Color of graph lane `i`. Lane numbering starts at 1, which maps to the first color.
 pub fn lane_color(i: u16) -> Color32 {
-    LANES[i as usize % LANES.len()]
+    LANES[(i as usize + LANES.len() - 1) % LANES.len()]
+}
+
+/// Opaque blend of `over` on top of `base` (`amount` 0..=1).
+pub fn mix(base: Color32, over: Color32, amount: f32) -> Color32 {
+    let lerp = |a: u8, b: u8| (a as f32 + (b as f32 - a as f32) * amount).round() as u8;
+    Color32::from_rgb(
+        lerp(base.r(), over.r()),
+        lerp(base.g(), over.g()),
+        lerp(base.b(), over.b()),
+    )
 }
 
 #[derive(Clone, Copy)]
@@ -80,30 +90,31 @@ pub fn palette(dark: bool) -> Palette {
         }
     } else {
         Palette {
+            // Soft, slightly warm (cream) surfaces rather than pure white, to keep glare down.
             selection: Color32::from_rgb(0x1a, 0x6f, 0xe8),
             selection_text: Color32::WHITE,
-            hover: Color32::from_rgb(0xea, 0xec, 0xf0),
-            muted: Color32::from_rgb(0x6a, 0x6e, 0x76),
-            sidebar: Color32::from_rgb(0xf1, 0xf2, 0xf4),
-            panel: Color32::from_rgb(0xfb, 0xfb, 0xfc),
-            border: Color32::from_rgb(0xd5, 0xd8, 0xdd),
-            added_bg: Color32::from_rgb(0xe6, 0xf6, 0xe9),
-            removed_bg: Color32::from_rgb(0xfc, 0xe9, 0xea),
-            added_word: Color32::from_rgb(0xab, 0xe4, 0xb6),
-            removed_word: Color32::from_rgb(0xf6, 0xb8, 0xbd),
-            hunk_bg: Color32::from_rgb(0xe9, 0xef, 0xfa),
+            hover: Color32::from_rgb(0xd9, 0xd4, 0xc8),
+            muted: Color32::from_rgb(0x66, 0x62, 0x5a),
+            sidebar: Color32::from_rgb(0xe2, 0xde, 0xd4),
+            panel: Color32::from_rgb(0xed, 0xea, 0xe2),
+            border: Color32::from_rgb(0xc6, 0xc0, 0xb2),
+            added_bg: Color32::from_rgb(0xd5, 0xe9, 0xcf),
+            removed_bg: Color32::from_rgb(0xf3, 0xd7, 0xd2),
+            added_word: Color32::from_rgb(0x9f, 0xd8, 0xaa),
+            removed_word: Color32::from_rgb(0xec, 0xa9, 0xae),
+            hunk_bg: Color32::from_rgb(0xda, 0xdc, 0xe4),
             hunk_text: Color32::from_rgb(0x3a, 0x5a, 0x9a),
-            line_no: Color32::from_rgb(0x9a, 0x9e, 0xa6),
-            line_selected: Color32::from_rgb(0xc9, 0xdb, 0xfb),
+            line_no: Color32::from_rgb(0x90, 0x8b, 0x80),
+            line_selected: Color32::from_rgb(0xb9, 0xcd, 0xf2),
             added: Color32::from_rgb(0x1a, 0x7f, 0x37),
             removed: Color32::from_rgb(0xcf, 0x22, 0x2e),
             modified: Color32::from_rgb(0xb0, 0x7d, 0x00),
             renamed: Color32::from_rgb(0x09, 0x69, 0xda),
             conflict: Color32::from_rgb(0xcf, 0x22, 0x2e),
-            badge_bg: Color32::from_rgb(0xff, 0xff, 0xff),
-            badge_border: Color32::from_rgb(0xb8, 0xbc, 0xc4),
+            badge_bg: Color32::from_rgb(0xf5, 0xf2, 0xea),
+            badge_border: Color32::from_rgb(0xae, 0xa8, 0x9a),
             tag: Color32::from_rgb(0x82, 0x50, 0xdf),
-            warning_bg: Color32::from_rgb(0xff, 0xf3, 0xc4),
+            warning_bg: Color32::from_rgb(0xf3, 0xe3, 0xa6),
         }
     }
 }
@@ -128,22 +139,41 @@ pub fn apply_style(ctx: &egui::Context) {
         visuals.window_fill = if dark {
             Color32::from_rgb(0x25, 0x26, 0x29)
         } else {
-            Color32::WHITE
+            Color32::from_rgb(0xf2, 0xef, 0xe7)
         };
+        // Text fields: slightly lighter than the panel, still not pure white.
         visuals.extreme_bg_color = if dark {
             Color32::from_rgb(0x15, 0x16, 0x18)
         } else {
-            Color32::WHITE
+            Color32::from_rgb(0xf7, 0xf4, 0xec)
         };
         visuals.faint_bg_color = if dark {
             Color32::from_rgb(0x21, 0x22, 0x25)
         } else {
-            Color32::from_rgb(0xf4, 0xf5, 0xf7)
+            Color32::from_rgb(0xe4, 0xe0, 0xd6)
         };
+        if !dark {
+            // Buttons a touch darker than the panel so they stay visible on grey.
+            visuals.widgets.inactive.weak_bg_fill = Color32::from_rgb(0xd9, 0xd4, 0xc8);
+            visuals.widgets.inactive.bg_fill = Color32::from_rgb(0xd9, 0xd4, 0xc8);
+            visuals.widgets.hovered.weak_bg_fill = Color32::from_rgb(0xcc, 0xc6, 0xb8);
+            visuals.widgets.hovered.bg_fill = Color32::from_rgb(0xcc, 0xc6, 0xb8);
+        }
         visuals.selection.bg_fill = p.selection;
         visuals.selection.stroke.color = p.selection_text;
         visuals.hyperlink_color = p.renamed;
         visuals.widgets.noninteractive.bg_stroke.color = p.border;
+        // High-contrast text: near white on dark, near black on light.
+        visuals.widgets.noninteractive.fg_stroke.color = if dark {
+            Color32::from_rgb(0xec, 0xec, 0xee)
+        } else {
+            Color32::from_rgb(0x1a, 0x1a, 0x1c)
+        };
+        visuals.widgets.inactive.fg_stroke.color = if dark {
+            Color32::from_rgb(0xdc, 0xdc, 0xe0)
+        } else {
+            Color32::from_rgb(0x2a, 0x2a, 0x2e)
+        };
         let theme = if dark {
             egui::Theme::Dark
         } else {
@@ -287,4 +317,43 @@ pub fn lfs_badge(ui: &mut egui::Ui, selected: bool) -> egui::Response {
     ui.painter()
         .galley(rect.center() - galley.size() / 2.0, galley, color);
     resp.on_hover_text("Tracked with Git LFS")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every non-ASCII character that appears in the source must have a glyph in the app's
+    /// fonts, otherwise it is drawn as an empty box.
+    #[test]
+    fn source_text_has_glyphs() {
+        let ctx = egui::Context::default();
+        install_fonts(&ctx);
+        // Fonts are loaded at the start of the first pass.
+        let mut output = ctx.run_ui(Default::default(), |_| {});
+        output.textures_delta.clear();
+
+        let mut chars = std::collections::BTreeSet::new();
+        let mut stack = vec![std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src")];
+        while let Some(dir) = stack.pop() {
+            for entry in std::fs::read_dir(dir).unwrap().flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    stack.push(path);
+                } else if path.extension().is_some_and(|e| e == "rs") {
+                    let text = std::fs::read_to_string(&path).unwrap();
+                    // Comments are not shown in the UI.
+                    for line in text.lines().filter(|l| !l.trim_start().starts_with("//")) {
+                        chars.extend(line.chars().filter(|c| !c.is_ascii()));
+                    }
+                }
+            }
+        }
+        let font = FontId::proportional(13.0);
+        let missing: String = chars
+            .into_iter()
+            .filter(|c| !ctx.fonts_mut(|f| f.has_glyph(&font, *c)))
+            .collect();
+        assert!(missing.is_empty(), "no glyph for: {missing}");
+    }
 }

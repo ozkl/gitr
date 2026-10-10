@@ -189,6 +189,49 @@ pub fn prepared_message(repo: &Path) -> Option<String> {
     (!msg.is_empty()).then_some(msg)
 }
 
+/// Git's draft for a pending squash merge (`SQUASH_MSG`), if there is one.
+pub fn squash_draft(repo: &Path) -> Option<String> {
+    std::fs::read_to_string(git_dir(repo).join("SQUASH_MSG"))
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+}
+
+/// A tidy commit message for a squash merge, from git's draft (a raw `git log` dump).
+///
+/// One squashed commit: its own subject. Several: a subject naming `source`, then one
+/// bullet per commit, oldest first.
+pub fn squash_message(draft: &str, source: Option<&str>) -> String {
+    // The draft lists commits newest first; a commit's subject is the first indented
+    // line after its `commit <id>` header.
+    let mut subjects = Vec::new();
+    let mut want_subject = false;
+    for line in draft.lines() {
+        if line.starts_with("commit ") {
+            want_subject = true;
+        } else if want_subject && line.starts_with("    ") && !line.trim().is_empty() {
+            subjects.push(line.trim().to_owned());
+            want_subject = false;
+        }
+    }
+    subjects.reverse();
+    let title = match source {
+        // A bare commit id reads better shortened and without "branch".
+        Some(s) if s.len() >= 12 && s.chars().all(|c| c.is_ascii_hexdigit()) => {
+            format!("Squash merge commit '{}'", &s[..7])
+        }
+        Some(s) => format!("Squash merge branch '{s}'"),
+        None => "Squash merge".to_owned(),
+    };
+    match subjects.as_slice() {
+        [] => title,
+        [only] => only.clone(),
+        many => {
+            let bullets: Vec<String> = many.iter().map(|s| format!("* {s}")).collect();
+            format!("{title}\n\n{}", bullets.join("\n"))
+        }
+    }
+}
+
 /// Git commands that resolve `path` by taking one side entirely.
 pub fn take_side_commands(path: &str, kind: ConflictKind, ours: bool) -> Vec<Vec<String>> {
     let (o, t) = kind.sides();
@@ -479,6 +522,60 @@ mod tests {
             "top\nmain line\nfeature line\nbottom\n"
         );
         assert_eq!(git(&["show", ":gone.txt"]).unwrap(), "changed on feature\n");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn squash_message_is_tidy() {
+        let draft = "Squashed commit of the following:\n\ncommit cd43684a\nAuthor: T <t@e.com>\nDate:   Wed Oct 7\n\n    login validation\n    \n    Longer explanation.\n\ncommit e155a786\nAuthor: T <t@e.com>\nDate:   Wed Oct 7\n\n    login form\n";
+        assert_eq!(
+            squash_message(draft, Some("feature/login")),
+            "Squash merge branch 'feature/login'\n\n* login form\n* login validation"
+        );
+        assert!(
+            squash_message(draft, Some("cd43684a674e82428831d6bb7485d530a224a4dc"))
+                .starts_with("Squash merge commit 'cd43684'\n")
+        );
+        assert!(squash_message(draft, None).starts_with("Squash merge\n"));
+        // A single squashed commit keeps its own subject.
+        let one = "Squashed commit of the following:\n\ncommit e155a786\nAuthor: T\nDate:   x\n\n    login form\n";
+        assert_eq!(squash_message(one, Some("feature/login")), "login form");
+    }
+
+    /// git's real squash draft is turned into the tidy message.
+    #[test]
+    fn squash_message_from_real_git_draft() {
+        let dir = std::env::temp_dir().join(format!("gitr-squash-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let git = |args: &[&str]| cmd::run(&dir, args).unwrap();
+        git(&["init", "-q", "-b", "main"]);
+        git(&["config", "user.email", "t@example.com"]);
+        git(&["config", "user.name", "T"]);
+        std::fs::write(dir.join("a.txt"), "a").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-qm", "base"]);
+        git(&["checkout", "-qb", "feature/login"]);
+        for (file, subject) in [("b.txt", "login form"), ("c.txt", "login validation")] {
+            std::fs::write(dir.join(file), "x").unwrap();
+            git(&["add", "."]);
+            git(&[
+                "commit",
+                "-qm",
+                subject,
+                "-m",
+                "Body text that must not appear.",
+            ]);
+        }
+        git(&["checkout", "-q", "main"]);
+        assert!(squash_draft(&dir).is_none());
+        git(&["merge", "-q", "--squash", "feature/login"]);
+
+        let draft = squash_draft(&dir).expect("git writes SQUASH_MSG");
+        assert_eq!(
+            squash_message(&draft, Some("feature/login")),
+            "Squash merge branch 'feature/login'\n\n* login form\n* login validation"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

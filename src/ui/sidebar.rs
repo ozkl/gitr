@@ -589,7 +589,7 @@ fn folder(
             },
         );
         let r = match &b.upstream {
-            Some(u) => r.on_hover_text(format!("{full} → {u}")),
+            Some(u) => r.on_hover_text(format!("{full} {} {u}", icon::ARROW_RIGHT)),
             None => r.on_hover_text(&full),
         };
         if r.clicked() {

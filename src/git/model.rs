@@ -98,6 +98,8 @@ pub struct Refs {
     pub state: Option<RepoState>,
     /// Names of the two sides while an operation is in progress.
     pub sides: Option<super::conflict::SideLabels>,
+    /// Git's draft message when a squash merge is waiting to be committed.
+    pub squash_draft: Option<String>,
     /// Effective commit identity ("Name <email>"), if configured.
     pub identity: Option<String>,
 }
@@ -431,6 +433,7 @@ pub fn load_refs(repo: &Path) -> Result<Refs, String> {
     refs.stashes = load_stashes(repo);
     refs.submodules = load_submodules(repo);
     refs.state = repo_state(repo);
+    refs.squash_draft = super::conflict::squash_draft(repo);
     refs.sides = refs
         .state
         .map(|s| super::conflict::side_labels(repo, s, refs.head_branch.as_deref()));

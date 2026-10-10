@@ -91,6 +91,8 @@ pub enum Dialog {
         name: String,
     },
     Settings(Settings),
+    /// Add, rename, remove and reorder workspaces.
+    Workspaces(Vec<crate::workspace::Edit>),
     RepoSettings {
         repo: String,
         original: RepoConfig,
@@ -125,6 +127,7 @@ fn short_path(path: &str) -> String {
 
 pub enum AppAction {
     Clone { url: String, dest: PathBuf },
+    SaveWorkspaces(Vec<crate::workspace::Edit>),
     SaveSettings(Settings),
 }
 
@@ -156,6 +159,16 @@ impl Dialog {
             label: label.into(),
             commands,
         }
+    }
+
+    pub fn workspaces(workspaces: &[crate::workspace::Workspace]) -> Dialog {
+        Dialog::Workspaces(
+            workspaces
+                .iter()
+                .enumerate()
+                .map(|(i, w)| (Some(i), w.name.clone()))
+                .collect(),
+        )
     }
 
     pub fn repo_settings(tab: &RepoTab) -> Dialog {
@@ -201,7 +214,7 @@ impl Dialog {
             remote,
             branch,
             rebase,
-            autostash: true,
+            autostash: false,
         }
     }
 
@@ -642,6 +655,10 @@ fn body(ui: &mut egui::Ui, dialog: &mut Dialog, tab: Option<&mut RepoTab>) -> Ou
                         }
                     }
                     args.push(source.clone());
+                    if *squash {
+                        // Remembered for the prefilled commit message.
+                        tab.squash_source = Some(source.clone());
+                    }
                     tab.git(format!("Merge {source}"), args);
                 }
             }
@@ -996,6 +1013,79 @@ fn body(ui: &mut egui::Ui, dialog: &mut Dialog, tab: Option<&mut RepoTab>) -> Ou
                         Box::new(move |repo| crate::git::save_repo_config(repo, &old, &new)),
                     );
                 }
+            }
+            close = ok || cancel;
+        }
+        Dialog::Workspaces(edits) => {
+            let p = theme::pal(ui);
+            ui.heading("Workspaces");
+            ui.add_space(4.0);
+            ui.add(
+                egui::Label::new(
+                    RichText::new("Each workspace has its own repository list and open tabs.")
+                        .small()
+                        .color(p.muted),
+                )
+                .wrap(),
+            );
+            ui.add_space(6.0);
+            let count = edits.len();
+            let mut remove = None;
+            let mut moved = None;
+            for (i, (_, name)) in edits.iter_mut().enumerate() {
+                ui.horizontal(|ui| {
+                    ui.add(
+                        egui::TextEdit::singleline(name)
+                            .hint_text("Workspace name")
+                            .desired_width(250.0),
+                    );
+                    use egui_phosphor::regular as icon;
+                    if ui
+                        .add_enabled(i > 0, egui::Button::new(icon::ARROW_UP))
+                        .on_hover_text("Move up")
+                        .clicked()
+                    {
+                        moved = Some((i, i - 1));
+                    }
+                    if ui
+                        .add_enabled(i + 1 < count, egui::Button::new(icon::ARROW_DOWN))
+                        .on_hover_text("Move down")
+                        .clicked()
+                    {
+                        moved = Some((i, i + 1));
+                    }
+                    if ui
+                        .add_enabled(count > 1, egui::Button::new(icon::TRASH))
+                        .on_hover_text(
+                            "Remove this workspace (repositories on disk are not touched)",
+                        )
+                        .clicked()
+                    {
+                        remove = Some(i);
+                    }
+                });
+            }
+            if let Some((from, to)) = moved {
+                edits.swap(from, to);
+            }
+            if let Some(i) = remove {
+                edits.remove(i);
+            }
+            ui.add_space(4.0);
+            if ui
+                .button(format!("{} Add Workspace", egui_phosphor::regular::PLUS))
+                .clicked()
+            {
+                edits.push((None, String::new()));
+            }
+            let problem = crate::workspace::validate(edits);
+            if let Some(problem) = problem {
+                ui.add_space(4.0);
+                ui.label(RichText::new(problem).small().color(p.removed));
+            }
+            let (ok, cancel) = buttons(ui, "Save", problem.is_none(), false);
+            if ok {
+                app = Some(AppAction::SaveWorkspaces(edits.clone()));
             }
             close = ok || cancel;
         }

@@ -59,7 +59,12 @@ pub fn changes_view(ui: &mut egui::Ui, tab: &mut RepoTab, cx: &mut Ctx) {
                             .add_enabled(conflicts == 0, egui::Button::new("Continue"))
                             .clicked()
                         {
-                            if cmd == "merge" {
+                            if cmd == "merge" && !tab.commit_subject.trim().is_empty() {
+                                // Use the message shown in the commit box (it may be edited).
+                                tab.commit(false);
+                            } else if cmd == "merge" {
+                                // `--cleanup=strip` drops git's "# Conflicts:" comment lines,
+                                // which `--no-edit` would otherwise keep in the message.
                                 tab.git(
                                     "Continue merge",
                                     vec![
@@ -67,6 +72,7 @@ pub fn changes_view(ui: &mut egui::Ui, tab: &mut RepoTab, cx: &mut Ctx) {
                                         s("core.editor=true"),
                                         s("commit"),
                                         s("--no-edit"),
+                                        s("--cleanup=strip"),
                                     ],
                                 );
                             } else {
@@ -121,13 +127,24 @@ pub fn changes_view(ui: &mut egui::Ui, tab: &mut RepoTab, cx: &mut Ctx) {
                 .frame(egui::Frame::new())
                 .resizable(false)
                 .show(ui, |ui| filter_bar(ui, tab));
-            let half = (ui.available_height() / 2.0).max(120.0);
-            egui::Panel::top("unstaged_panel")
+            // Start every run with an even split. For the first few frames the panel is pinned
+            // to exactly half (the layout around it, e.g. the commit box, is only measured
+            // after it has been drawn once); that also replaces the divider position egui
+            // saved last time. After that the user's dragging is kept for the session.
+            static SETTLE_FRAMES: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+            let settling = SETTLE_FRAMES.load(std::sync::atomic::Ordering::Relaxed) < 4;
+            let half = (ui.available_height() / 2.0).max(80.0);
+            let mut panel = egui::Panel::top("unstaged_panel")
                 .frame(egui::Frame::new())
-                .resizable(true)
-                .default_size(half)
-                .min_size(80.0)
-                .show(ui, |ui| file_list(ui, tab, cx, false));
+                .resizable(true);
+            if settling {
+                SETTLE_FRAMES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                ui.ctx().request_repaint();
+                panel = panel.exact_size(half);
+            } else {
+                panel = panel.default_size(half).min_size(80.0);
+            }
+            panel.show(ui, |ui| file_list(ui, tab, cx, false));
             egui::CentralPanel::no_frame().show(ui, |ui| file_list(ui, tab, cx, true));
         });
 

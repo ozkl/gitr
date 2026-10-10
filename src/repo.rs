@@ -124,6 +124,9 @@ pub struct RepoTab {
     pub commits: Vec<Commit>,
     pub graph: Vec<GraphRow>,
     pub index_of: HashMap<String, usize>,
+    /// For each commit: is it part of the current branch's history (reachable from HEAD)?
+    /// Empty when unknown, which means "treat all as current".
+    pub in_head: Vec<bool>,
     pub refs: Refs,
     pub status: Status,
     pub log_loaded: bool,
@@ -152,6 +155,8 @@ pub struct RepoTab {
     pub merge_editor: Option<MergeEditor>,
     /// The prepared merge message was put into the commit box for the current operation.
     merge_message_loaded: bool,
+    /// Branch or commit of the squash merge started from Gitr, for its commit message.
+    pub squash_source: Option<String>,
 
     pub selected_change: Option<(bool, String)>,
     pub change_diff: Option<(DiffKey, Loaded<FileDiff>)>,
@@ -222,6 +227,7 @@ impl RepoTab {
             commits: Vec::new(),
             graph: Vec::new(),
             index_of: HashMap::new(),
+            in_head: Vec::new(),
             refs: Refs::default(),
             status: Status::default(),
             log_loaded: false,
@@ -245,6 +251,7 @@ impl RepoTab {
             file_history: None,
             merge_editor: None,
             merge_message_loaded: false,
+            squash_source: None,
             selected_change: None,
             change_diff: None,
             line_selection: BTreeSet::new(),
@@ -349,6 +356,7 @@ impl RepoTab {
                             .collect();
                         self.commits = commits;
                         self.graph = rows;
+                        self.update_head_history();
                         let first_load = !self.log_loaded;
                         self.log_loaded = true;
                         self.load_error = None;
@@ -375,6 +383,7 @@ impl RepoTab {
                 Msg::Refs(generation, result) if generation == self.refs_gen => match result {
                     Ok(refs) => {
                         self.refs = refs;
+                        self.update_head_history();
                         self.prefill_merge_message();
                     }
                     Err(e) => self.load_error = Some(e),
@@ -824,10 +833,16 @@ impl RepoTab {
         }
     }
 
+    /// Marks the commits reachable from HEAD (the history of what is checked out).
+    fn update_head_history(&mut self) {
+        self.in_head = reachable_from(&self.commits, &self.index_of, self.refs.head_id.as_deref());
+    }
+
     /// Puts git's prepared message (MERGE_MSG) into an empty commit box once per operation.
     fn prefill_merge_message(&mut self) {
-        if self.refs.state.is_none() {
+        if self.refs.state.is_none() && self.refs.squash_draft.is_none() {
             self.merge_message_loaded = false;
+            self.squash_source = None;
             return;
         }
         if self.merge_message_loaded {
@@ -837,7 +852,15 @@ impl RepoTab {
         if !self.commit_subject.trim().is_empty() {
             return;
         }
-        if let Some(msg) = git::conflict::prepared_message(&self.path) {
+        // A squash merge leaves no merge in progress, only git's raw draft.
+        let message = match &self.refs.squash_draft {
+            Some(draft) if self.refs.state.is_none() => Some(git::conflict::squash_message(
+                draft,
+                self.squash_source.as_deref(),
+            )),
+            _ => git::conflict::prepared_message(&self.path),
+        };
+        if let Some(msg) = message {
             let (subject, body) = msg.split_once('\n').unwrap_or((&msg, ""));
             self.commit_subject = subject.trim().to_owned();
             self.commit_body = body.trim().to_owned();
@@ -1277,6 +1300,33 @@ fn same_status(a: &Status, b: &Status) -> bool {
     a.staged == b.staged && a.unstaged == b.unstaged
 }
 
+/// For each commit, whether it is `head` or one of its ancestors. Empty if `head` is
+/// unknown or not among the loaded commits.
+fn reachable_from(
+    commits: &[Commit],
+    index_of: &HashMap<String, usize>,
+    head: Option<&str>,
+) -> Vec<bool> {
+    let Some(start) = head.and_then(|h| index_of.get(h)).copied() else {
+        return Vec::new();
+    };
+    let mut reachable = vec![false; commits.len()];
+    let mut stack = vec![start];
+    while let Some(i) = stack.pop() {
+        if std::mem::replace(&mut reachable[i], true) {
+            continue;
+        }
+        stack.extend(
+            commits[i]
+                .parents
+                .iter()
+                .filter_map(|p| index_of.get(p))
+                .copied(),
+        );
+    }
+    reachable
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1328,5 +1378,41 @@ mod tests {
         assert_eq!(selected(&tab), ["a", "b", "c", "d"]);
         tab.move_change_selection(-1, false);
         assert_eq!(selected(&tab), ["b"]);
+    }
+
+    #[test]
+    fn marks_commits_in_head_history() {
+        // d (other branch) -> b ; c (HEAD) -> b -> a
+        let commit = |id: &str, parents: &[&str]| Commit {
+            id: id.into(),
+            parents: parents.iter().map(|p| p.to_string()).collect(),
+            author: String::new(),
+            email: String::new(),
+            time: 0,
+            subject: String::new(),
+        };
+        let commits = vec![
+            commit("d", &["b"]),
+            commit("c", &["b"]),
+            commit("b", &["a"]),
+            commit("a", &[]),
+        ];
+        let index: HashMap<String, usize> = commits
+            .iter()
+            .enumerate()
+            .map(|(i, c)| (c.id.clone(), i))
+            .collect();
+        assert_eq!(
+            reachable_from(&commits, &index, Some("c")),
+            [false, true, true, true]
+        );
+        // Checking out an older commit: newer ones are no longer "current".
+        assert_eq!(
+            reachable_from(&commits, &index, Some("b")),
+            [false, false, true, true]
+        );
+        // Unknown HEAD: nothing is dimmed.
+        assert!(reachable_from(&commits, &index, None).is_empty());
+        assert!(reachable_from(&commits, &index, Some("zzz")).is_empty());
     }
 }
