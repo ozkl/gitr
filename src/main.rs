@@ -52,6 +52,7 @@ fn main() -> eframe::Result {
 
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
+            .with_app_id("gitr")
             .with_title("Gitr")
             .with_inner_size([1400.0, 900.0])
             .with_min_inner_size([800.0, 500.0])

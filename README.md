@@ -66,6 +66,17 @@ cargo run --release -- /path/to/repo
 
 Linux needs the usual windowing dev packages (e.g. `libxkbcommon-dev libgtk-3-dev`).
 
+### Linux desktop installation
+
+```bash
+./install-linux.sh
+```
+
+This builds the release binary and installs it to `~/.local/bin`, with a desktop
+launcher and icons under `${XDG_DATA_HOME:-~/.local/share}`. Wayland uses the
+`gitr.desktop` entry matching the window's app ID to display the Gitr icon.
+Restart Gitr after installing; you can launch it from your application menu.
+
 ### macOS app bundle
 
 ```bash

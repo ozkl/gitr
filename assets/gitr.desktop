@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Gitr
+Comment=A fast, native Git client
+Exec=gitr
+Icon=gitr
+Terminal=false
+Categories=Development;RevisionControl;
+StartupWMClass=gitr
