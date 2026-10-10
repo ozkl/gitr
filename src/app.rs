@@ -105,6 +105,8 @@ pub struct GitrApp {
     show_activity: bool,
     was_focused: bool,
     repo_filter: String,
+    /// Tab being dragged in the repository list.
+    repo_drag: Option<usize>,
     git_version: Option<String>,
     logo: egui::TextureHandle,
     /// Title last sent to the window.
@@ -146,6 +148,7 @@ impl GitrApp {
             show_activity: false,
             was_focused: true,
             repo_filter: String::new(),
+            repo_drag: None,
             git_version: cmd::git_version(),
             logo: load_logo(&cc.egui_ctx),
             window_title: String::new(),
@@ -268,6 +271,27 @@ impl GitrApp {
         self.tabs
             .push(RepoTab::open(root, ctx.clone(), self.settings.commit_limit));
         self.active = Some(self.tabs.len() - 1);
+    }
+
+    /// Moves a tab so it ends up before the tab currently at `to` (`to == len` moves it last).
+    fn move_tab(&mut self, from: usize, to: usize) {
+        let to = if to > from { to - 1 } else { to };
+        if from == to || from >= self.tabs.len() {
+            return;
+        }
+        let tab = self.tabs.remove(from);
+        self.tabs.insert(to, tab);
+        self.active = self.active.map(|a| {
+            if a == from {
+                to
+            } else if from < a && a <= to {
+                a - 1
+            } else if to <= a && a < from {
+                a + 1
+            } else {
+                a
+            }
+        });
     }
 
     fn close_tab(&mut self, i: usize) {
@@ -881,6 +905,7 @@ impl GitrApp {
         let mut activate = None;
         let mut close = None;
         let mut settings = None;
+        let mut reorder = None;
         egui::ScrollArea::vertical()
             .auto_shrink(false)
             .show(ui, |ui| {
@@ -889,14 +914,23 @@ impl GitrApp {
                     ui.add_space(8.0);
                     ui.label(RichText::new("No open repositories").color(p.muted));
                 }
+                let mut rows = Vec::new();
                 for (i, tab) in self.tabs.iter().enumerate() {
                     if !filter.is_empty() && !tab.name.to_lowercase().contains(&filter) {
                         continue;
                     }
                     let active = self.active == Some(i);
-                    let (rect, resp) = ui
-                        .allocate_exact_size(Vec2::new(ui.available_width(), 26.0), Sense::click());
-                    if active {
+                    let (rect, resp) = ui.allocate_exact_size(
+                        Vec2::new(ui.available_width(), 26.0),
+                        Sense::click_and_drag(),
+                    );
+                    rows.push((i, rect));
+                    if resp.drag_started() {
+                        self.repo_drag = Some(i);
+                    }
+                    if self.repo_drag == Some(i) {
+                        ui.painter().rect_filled(rect, 5.0, p.hover);
+                    } else if active {
                         // A step stronger than hover: lighter on dark, darker on light.
                         let fill = if ui.visuals().dark_mode {
                             p.hover.gamma_multiply(1.4)
@@ -932,7 +966,11 @@ impl GitrApp {
                             if changes == 1 { "" } else { "s" }
                         )
                     };
-                    let resp = resp.on_hover_text(hint);
+                    let resp = if self.repo_drag.is_some() {
+                        resp
+                    } else {
+                        resp.on_hover_text(hint)
+                    };
                     if resp.clicked() {
                         activate = Some(i);
                     }
@@ -959,7 +997,36 @@ impl GitrApp {
                         }
                     });
                 }
+                // Dragging a row: a line shows where it lands; releasing moves the tab.
+                if let Some(from) = self.repo_drag {
+                    let (pos, released) =
+                        ui.input(|i| (i.pointer.interact_pos(), i.pointer.any_released()));
+                    if let (Some(pos), Some(&(_, last))) = (pos, rows.last()) {
+                        let (to, y) = rows
+                            .iter()
+                            .find(|(_, rect)| pos.y < rect.center().y)
+                            .map(|&(i, rect)| (i, rect.top()))
+                            .unwrap_or((self.tabs.len(), last.bottom()));
+                        if to != from && to != from + 1 {
+                            ui.painter().hline(
+                                last.x_range(),
+                                y,
+                                egui::Stroke::new(2.0, ui.visuals().selection.bg_fill),
+                            );
+                            ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+                        }
+                        if released {
+                            reorder = Some((from, to));
+                        }
+                    }
+                    if released || !ui.input(|i| i.pointer.any_down()) {
+                        self.repo_drag = None;
+                    }
+                }
             });
+        if let Some((from, to)) = reorder {
+            self.move_tab(from, to);
+        }
         if let Some(i) = activate {
             self.active = Some(i);
         }
