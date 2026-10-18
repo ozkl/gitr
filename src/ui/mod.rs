@@ -7,6 +7,7 @@ pub mod github;
 pub mod history;
 pub mod image_view;
 pub mod sidebar;
+pub mod text_select;
 pub mod theme;
 
 use std::path::PathBuf;

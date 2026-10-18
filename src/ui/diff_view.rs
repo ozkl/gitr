@@ -7,6 +7,7 @@ use egui::{Align2, Color32, Pos2, Rect, RichText, Sense, Vec2};
 
 use crate::git::diff::{FileDiff, LineKind, Selection};
 use crate::repo::PatchAction;
+use crate::ui::text_select::Selector;
 use crate::ui::theme::{self, Palette};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -186,6 +187,7 @@ fn paint_line(
     g: &Geometry,
     p: &Palette,
     selected: bool,
+    highlight: Option<Rect>,
     text_color: Color32,
 ) {
     let painter = ui.painter();
@@ -196,6 +198,9 @@ fn paint_line(
         _ => Color32::TRANSPARENT,
     };
     painter.rect_filled(rect, 0.0, bg);
+    if let Some(r) = highlight {
+        painter.rect_filled(r, 0.0, text_highlight(p));
+    }
     let gutter_rect = Rect::from_min_size(rect.min, Vec2::new(g.gutter, rect.height()));
     if selected {
         painter.rect_filled(gutter_rect, 0.0, p.line_selected);
@@ -286,6 +291,21 @@ fn paint_line(
     let galley = painter.layout_job(job);
     let pos = Pos2::new(text_pos.x, y - galley.size().y / 2.0);
     painter.galley(pos, galley, text_color);
+}
+
+fn text_highlight(p: &Palette) -> Color32 {
+    p.selection.gamma_multiply(0.45)
+}
+
+/// The copyable text of a diff row: line content without the +/- marker.
+fn row_text(diff: &FileDiff, index: usize) -> Option<&str> {
+    match row_at(diff, index)? {
+        Row::Line(h, l) => {
+            let line = &diff.hunks[h].lines[l];
+            (line.kind != LineKind::NoNewline).then_some(line.text.as_str())
+        }
+        Row::Header(_) => None,
+    }
 }
 
 fn content_width(diff: &FileDiff, g: &Geometry) -> f32 {
@@ -410,17 +430,31 @@ pub fn diff_view(
 
     let shift = ui.input(|i| i.modifiers.shift);
     let toggle = ui.input(|i| i.modifiers.command);
+    let mut sel = Selector::new(
+        ui,
+        ui.id().with(("diff_select", &id_salt)),
+        g.row_h,
+        g.char_w,
+    );
 
     // Rows touch each other so added/removed blocks form continuous bands.
     ui.spacing_mut().item_spacing.y = 0.0;
     egui::ScrollArea::both()
-        .id_salt(id_salt)
+        .id_salt(&id_salt)
         .auto_shrink(false)
         .show_rows(ui, g.row_h, total, |ui, range| {
             ui.set_min_width(width);
             for index in range {
                 let (rect, resp) =
-                    ui.allocate_exact_size(Vec2::new(width, g.row_h), Sense::click());
+                    ui.allocate_exact_size(Vec2::new(width, g.row_h), Sense::click_and_drag());
+                let highlight = sel.row(
+                    ui,
+                    index,
+                    rect,
+                    &resp,
+                    rect.left() + g.gutter,
+                    row_text(diff, index),
+                );
                 match row_at(diff, index) {
                     Some(Row::Header(h)) => {
                         ui.painter().rect_filled(rect, 0.0, p.hunk_bg);
@@ -500,11 +534,16 @@ pub fn diff_view(
                     }
                     Some(Row::Line(h, l)) => {
                         let selected = state.selection.contains(&(h, l));
-                        paint_line(ui, rect, diff, h, l, &g, &p, selected, text_color);
+                        paint_line(
+                            ui, rect, diff, h, l, &g, &p, selected, highlight, text_color,
+                        );
                         let kind = diff.hunks[h].lines[l].kind;
                         let selectable =
                             can_partial && matches!(kind, LineKind::Added | LineKind::Removed);
-                        if selectable && resp.hovered() {
+                        let in_gutter = resp
+                            .hover_pos()
+                            .is_some_and(|pos| pos.x < rect.left() + g.gutter);
+                        if selectable && in_gutter {
                             ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
                         }
                         if selectable && resp.clicked() {
@@ -521,6 +560,7 @@ pub fn diff_view(
                     None => {}
                 }
             }
+            sel.finish(ui, total, true, |i| row_text(diff, i).map(str::to_owned));
         });
     request
 }
@@ -580,6 +620,12 @@ pub fn diff_inline(
     let total = row_count(diff);
     let text_color = ui.visuals().text_color();
     let width = ui.available_width();
+    let mut sel = Selector::new(
+        ui,
+        ui.id().with(("inline_select", &id_salt)),
+        g.row_h,
+        g.char_w,
+    );
     egui::ScrollArea::horizontal()
         .id_salt(("inline_diff", id_salt))
         .auto_shrink([false, true])
@@ -587,10 +633,19 @@ pub fn diff_inline(
             ui.spacing_mut().item_spacing.y = 0.0;
             let width = content_width(diff, &g).max(width);
             for index in 0..total.min(max_rows) {
-                let (rect, _) = ui.allocate_exact_size(Vec2::new(width, g.row_h), Sense::hover());
-                if !ui.is_rect_visible(rect) {
+                let (rect, resp) =
+                    ui.allocate_exact_size(Vec2::new(width, g.row_h), Sense::click_and_drag());
+                if !ui.is_rect_visible(rect) && !resp.dragged() {
                     continue;
                 }
+                let highlight = sel.row(
+                    ui,
+                    index,
+                    rect,
+                    &resp,
+                    rect.left() + g.gutter,
+                    row_text(diff, index),
+                );
                 match row_at(diff, index) {
                     Some(Row::Header(h)) => {
                         ui.painter().rect_filled(rect, 0.0, p.hunk_bg);
@@ -603,11 +658,14 @@ pub fn diff_inline(
                         );
                     }
                     Some(Row::Line(h, l)) => {
-                        paint_line(ui, rect, diff, h, l, &g, &p, false, text_color)
+                        paint_line(ui, rect, diff, h, l, &g, &p, false, highlight, text_color)
                     }
                     None => {}
                 }
             }
+            sel.finish(ui, total.min(max_rows), false, |i| {
+                row_text(diff, i).map(str::to_owned)
+            });
         });
     if total > max_rows {
         ui.label(
@@ -641,14 +699,20 @@ pub fn text_view(
         .unwrap_or(0);
     let width = (gutter + max_chars as f32 * char_w + 40.0).max(ui.available_width());
     let text_color = ui.visuals().text_color();
+    let mut sel = Selector::new(ui, ui.id().with(("text_select", &id_salt)), row_h, char_w);
     ui.spacing_mut().item_spacing.y = 0.0;
     egui::ScrollArea::both()
-        .id_salt(id_salt)
+        .id_salt(&id_salt)
         .auto_shrink(false)
         .show_rows(ui, row_h, lines.len(), |ui, range| {
             ui.set_min_width(width);
             for i in range {
-                let (rect, _) = ui.allocate_exact_size(Vec2::new(width, row_h), Sense::hover());
+                let (rect, resp) =
+                    ui.allocate_exact_size(Vec2::new(width, row_h), Sense::click_and_drag());
+                let highlight = sel.row(ui, i, rect, &resp, rect.left() + gutter, Some(lines[i]));
+                if let Some(r) = highlight {
+                    ui.painter().rect_filled(r, 0.0, text_highlight(&p));
+                }
                 let y = rect.center().y;
                 ui.painter().text(
                     Pos2::new(rect.left() + gutter - 8.0, y),
@@ -671,6 +735,9 @@ pub fn text_view(
                     text_color,
                 );
             }
+            sel.finish(ui, lines.len(), true, |i| {
+                lines.get(i).map(|l| (*l).to_owned())
+            });
         });
 }
 

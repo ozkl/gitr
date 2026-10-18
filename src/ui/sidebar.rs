@@ -233,8 +233,8 @@ pub fn sidebar(ui: &mut egui::Ui, tab: &mut RepoTab, cx: &mut Ctx) {
                 .collect();
             section(ui, "Tags", tags.len(), false, filtering, None, |ui| {
                 for tag in &tags {
-                    let selected = tab.selected.as_deref() == Some(tag.target.as_str())
-                        && tab.view == View::History;
+                    let tag_ref = format!("refs/tags/{}", tag.name);
+                    let selected = tab.is_selected_ref(&tag_ref, &tag.target);
                     let r = row(
                         ui,
                         Row {
@@ -247,7 +247,7 @@ pub fn sidebar(ui: &mut egui::Ui, tab: &mut RepoTab, cx: &mut Ctx) {
                         },
                     );
                     if r.clicked() {
-                        tab.reveal_commit(&tag.target);
+                        tab.reveal_ref(tag_ref, &tag.target);
                     }
                     r.context_menu(|ui| {
                         if ui.button(format!("Checkout '{}'", tag.name)).clicked() {
@@ -561,8 +561,11 @@ fn folder(
             Some(r) => format!("{r}/{}", b.name),
             None => b.name.clone(),
         };
-        let selected =
-            tab.selected.as_deref() == Some(b.target.as_str()) && tab.view == View::History;
+        let ref_name = match remote {
+            Some(_) => format!("refs/remotes/{full}"),
+            None => format!("refs/heads/{full}"),
+        };
+        let selected = tab.is_selected_ref(&ref_name, &b.target);
         let mut right = String::new();
         if b.ahead > 0 {
             right.push_str(&format!("{}{} ", icon::ARROW_UP, b.ahead));
@@ -593,7 +596,7 @@ fn folder(
             None => r.on_hover_text(&full),
         };
         if r.clicked() {
-            tab.reveal_commit(&b.target);
+            tab.reveal_ref(ref_name, &b.target);
         }
         if r.double_clicked() && !b.is_head {
             match remote {

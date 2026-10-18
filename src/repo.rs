@@ -138,6 +138,9 @@ pub struct RepoTab {
 
     pub view: View,
     pub selected: Option<String>,
+    /// The sidebar ref (`refs/heads/main`, ...) the selection came from. Several refs often
+    /// point at one commit; only this one is highlighted.
+    pub selected_ref: Option<String>,
     pub scroll_to_selected: bool,
     pub details: Option<Loaded<CommitDetails>>,
     pub detail_tab: DetailTab,
@@ -238,6 +241,7 @@ impl RepoTab {
             diff_gen: 0,
             view: View::History,
             selected: None,
+            selected_ref: None,
             scroll_to_selected: false,
             details: None,
             detail_tab: DetailTab::Commit,
@@ -554,6 +558,7 @@ impl RepoTab {
 
     pub fn select_commit(&mut self, id: String) {
         self.view = View::History;
+        self.selected_ref = None;
         if self.selected.as_deref() == Some(id.as_str()) && self.details.is_some() {
             return;
         }
@@ -581,6 +586,21 @@ impl RepoTab {
             self.select_commit(full);
             self.scroll_to_selected = true;
         }
+    }
+
+    /// Selects the commit `name` points at, remembering the ref for the sidebar highlight.
+    pub fn reveal_ref(&mut self, name: String, id: &str) {
+        self.reveal_commit(id);
+        if self.selected.as_deref().is_some_and(|s| s.starts_with(id)) {
+            self.selected_ref = Some(name);
+        }
+    }
+
+    /// Whether the sidebar row for ref `name` (pointing at `id`) is the current selection.
+    pub fn is_selected_ref(&self, name: &str, id: &str) -> bool {
+        self.view == View::History
+            && self.selected_ref.as_deref() == Some(name)
+            && self.selected.as_deref().is_some_and(|s| s.starts_with(id))
     }
 
     pub fn load_commit_diff(&mut self, file: &FileChange) {
