@@ -1128,9 +1128,14 @@ impl GitrApp {
                     ui.label(format!("{op}…"));
                 } else if let Some(last) = tab.activity.last() {
                     let color = if last.ok { p.muted } else { p.removed };
+                    let age = (chrono::Local::now() - last.time).num_seconds();
+                    let (ago, next) = crate::format::time_ago(age);
+                    // Redraw only when the text changes, so idle stays idle.
+                    ui.ctx()
+                        .request_repaint_after(std::time::Duration::from_secs(next));
                     ui.label(
                         RichText::new(format!(
-                            "{} {} — {}",
+                            "{} {} — {} ({ago})",
                             if last.ok { icon::CHECK } else { icon::WARNING },
                             last.label,
                             last.time.format("%H:%M:%S")
