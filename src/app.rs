@@ -702,7 +702,7 @@ impl GitrApp {
         let p = theme::pal(ui);
         let mut activate = None;
         let mut close = None;
-        let mut action: Option<u8> = None;
+        let mut action: Option<AddRepo> = None;
         let mut repo_settings = None;
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 4.0;
@@ -826,37 +826,7 @@ impl GitrApp {
                     }
                 });
             }
-            ui.menu_button(icon::PLUS, |ui| {
-                if ui
-                    .button(format!("{} Open Repository…", icon::FOLDER_OPEN))
-                    .clicked()
-                {
-                    action = Some(0);
-                    ui.close();
-                }
-                if ui
-                    .button(format!("{} Clone Repository…", icon::DOWNLOAD_SIMPLE))
-                    .clicked()
-                {
-                    action = Some(1);
-                    ui.close();
-                }
-                if ui
-                    .button(format!("{} New Repository…", icon::FOLDER_PLUS))
-                    .clicked()
-                {
-                    action = Some(2);
-                    ui.close();
-                }
-                ui.separator();
-                if ui
-                    .button(format!("{} GitHub Accounts…", icon::GITHUB_LOGO))
-                    .clicked()
-                {
-                    action = Some(3);
-                    ui.close();
-                }
-            });
+            ui.menu_button(icon::PLUS, |ui| action = add_repo_menu(ui));
         });
         if let Some(i) = activate {
             self.active = Some(i);
@@ -868,13 +838,17 @@ impl GitrApp {
         if let Some(i) = close {
             self.close_tab(i);
         }
-        let ctx = ui.ctx().clone();
+        if let Some(action) = action {
+            self.add_repo(ui.ctx(), action);
+        }
+    }
+
+    fn add_repo(&mut self, ctx: &egui::Context, action: AddRepo) {
         match action {
-            Some(0) => self.pick_and_open(&ctx),
-            Some(1) => self.dialog = Some(self.clone_dialog()),
-            Some(2) => self.init_repo(&ctx),
-            Some(3) => self.github.open(),
-            _ => {}
+            AddRepo::Open => self.pick_and_open(ctx),
+            AddRepo::Clone => self.dialog = Some(self.clone_dialog()),
+            AddRepo::New => self.init_repo(ctx),
+            AddRepo::GitHub => self.github.open(),
         }
     }
 
@@ -882,19 +856,17 @@ impl GitrApp {
     fn repo_list(&mut self, ui: &mut egui::Ui) {
         let p = theme::pal(ui);
         ui.add_space(8.0);
+        let mut add = None;
         ui.horizontal(|ui| {
             ui.label(RichText::new("Repositories").strong());
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui
-                    .small_button(icon::PLUS)
-                    .on_hover_text("Open repository")
-                    .clicked()
-                {
-                    let ctx = ui.ctx().clone();
-                    self.pick_and_open(&ctx);
-                }
+                let plus = ui.small_button(icon::PLUS);
+                egui::Popup::menu(&plus).show(|ui| add = add_repo_menu(ui));
             });
         });
+        if let Some(action) = add {
+            self.add_repo(ui.ctx(), action);
+        }
         ui.add(
             egui::TextEdit::singleline(&mut self.repo_filter)
                 .hint_text(format!("{} Filter", icon::MAGNIFYING_GLASS))
@@ -1274,6 +1246,14 @@ impl GitrApp {
         if !tab.log_loaded {
             return;
         }
+        let needs_status = self
+            .devshot
+            .actions
+            .iter()
+            .any(|a| a == "select_all_unstaged");
+        if needs_status && tab.status.unstaged.is_empty() {
+            return;
+        }
         let needs_details = self.devshot.actions.iter().any(|a| a == "expand_all");
         if needs_details && !matches!(tab.details, Some(crate::repo::Loaded::Ready(_))) {
             return;
@@ -1283,6 +1263,7 @@ impl GitrApp {
             let (key, value) = action.split_once('=').unwrap_or((&action, ""));
             match key {
                 "changes" => tab.view = View::LocalChanges,
+                "select_all_unstaged" => tab.select_all_changes(false),
                 "first_change" => {
                     let first = tab
                         .status
@@ -1388,6 +1369,36 @@ impl GitrApp {
             }
         }
     }
+}
+
+#[derive(Clone, Copy)]
+enum AddRepo {
+    Open,
+    Clone,
+    New,
+    GitHub,
+}
+
+/// Contents of the "+" menus (tab bar and repository list).
+fn add_repo_menu(ui: &mut egui::Ui) -> Option<AddRepo> {
+    let mut action = None;
+    let mut item = |ui: &mut egui::Ui, glyph: &str, label: &str, a: AddRepo| {
+        if ui.button(format!("{glyph} {label}")).clicked() {
+            action = Some(a);
+            ui.close();
+        }
+    };
+    item(ui, icon::FOLDER_OPEN, "Open Repository…", AddRepo::Open);
+    item(
+        ui,
+        icon::DOWNLOAD_SIMPLE,
+        "Clone Repository…",
+        AddRepo::Clone,
+    );
+    item(ui, icon::FOLDER_PLUS, "New Repository…", AddRepo::New);
+    ui.separator();
+    item(ui, icon::GITHUB_LOGO, "GitHub Accounts…", AddRepo::GitHub);
+    action
 }
 
 fn load_logo(ctx: &egui::Context) -> egui::TextureHandle {

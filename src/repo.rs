@@ -172,6 +172,10 @@ pub struct RepoTab {
     pub selection_anchor: Option<String>,
     /// File paths in display order, per list (index 0 = unstaged, 1 = staged), from the last frame.
     pub change_order: [Vec<String>; 2],
+    /// Laid-out file lists (index 0 = unstaged, 1 = staged), rebuilt when their inputs change.
+    pub change_lists: [Option<std::sync::Arc<crate::ui::changes::ListCache>>; 2],
+    /// Bumped whenever `status` changes.
+    pub status_version: u64,
     /// Path filter for the local changes lists (applies to both).
     pub changes_filter: String,
     /// Request to focus the filter field on the next frame.
@@ -263,6 +267,8 @@ impl RepoTab {
             selected_changes: BTreeSet::new(),
             selection_anchor: None,
             change_order: [Vec::new(), Vec::new()],
+            change_lists: [None, None],
+            status_version: 0,
             changes_filter: String::new(),
             focus_changes_filter: false,
             last_clicked_line: None,
@@ -397,6 +403,7 @@ impl RepoTab {
                         let changed = !same_status(&status, &self.status);
                         self.status = status;
                         if changed {
+                            self.status_version += 1;
                             self.on_status_changed();
                         }
                     }
@@ -511,28 +518,24 @@ impl RepoTab {
     fn on_status_changed(&mut self) {
         // Keep the selected file if it is still present, preferring the same list.
         if let Some((staged, path)) = self.selected_change.clone() {
-            let in_list = |list: &Vec<FileChange>, p: &str| list.iter().any(|f| f.path == p);
-            let same = if staged {
-                &self.status.staged
-            } else {
-                &self.status.unstaged
+            // Path sets: lists can hold tens of thousands of files.
+            let paths = |list: &Vec<FileChange>| -> HashSet<String> {
+                list.iter().map(|f| f.path.clone()).collect()
             };
-            let other = if staged {
-                &self.status.unstaged
+            let (same, other) = if staged {
+                (paths(&self.status.staged), paths(&self.status.unstaged))
             } else {
-                &self.status.staged
+                (paths(&self.status.unstaged), paths(&self.status.staged))
             };
-            if in_list(same, &path) {
-                let same = same.clone();
-                self.selected_changes.retain(|p| in_list(&same, p));
+            if same.contains(&path) {
+                self.selected_changes.retain(|p| same.contains(p));
                 self.reload_change_diff();
-            } else if in_list(other, &path) {
+            } else if other.contains(&path) {
                 // The selection moved to the other list (staged/unstaged): follow it.
-                let other = other.clone();
                 let keep: BTreeSet<String> = self
                     .selected_changes
                     .iter()
-                    .filter(|p| in_list(&other, p))
+                    .filter(|p| other.contains(*p))
                     .cloned()
                     .collect();
                 self.select_change(!staged, path);
@@ -1092,9 +1095,8 @@ impl RepoTab {
         if paths.is_empty() {
             return;
         }
-        let mut args = vec!["add".into(), "-A".into(), "--".into()];
-        args.extend(paths);
-        self.git("Stage", args);
+        let base = vec!["add".into(), "-A".into(), "--".into()];
+        self.git_seq("Stage", with_paths(&base, paths));
     }
 
     pub fn unstage(&mut self, paths: Vec<String>) {
@@ -1102,7 +1104,7 @@ impl RepoTab {
             return;
         }
         let has_head = self.refs.head_id.is_some();
-        let mut args: Vec<String> = if has_head {
+        let base: Vec<String> = if has_head {
             vec!["reset".into(), "-q".into(), "HEAD".into(), "--".into()]
         } else {
             vec![
@@ -1113,8 +1115,7 @@ impl RepoTab {
                 "--".into(),
             ]
         };
-        args.extend(paths);
-        self.git("Unstage", args);
+        self.git_seq("Unstage", with_paths(&base, paths));
     }
 
     pub fn discard(&mut self, files: Vec<FileChange>) {
@@ -1123,14 +1124,18 @@ impl RepoTab {
             .partition(|f| f.kind == git::ChangeKind::Untracked);
         let mut commands = Vec::new();
         if !tracked.is_empty() {
-            let mut args: Vec<String> = vec!["checkout".into(), "--".into()];
-            args.extend(tracked.into_iter().map(|f| f.path));
-            commands.push(args);
+            let base = vec!["checkout".into(), "--".into()];
+            commands.extend(with_paths(
+                &base,
+                tracked.into_iter().map(|f| f.path).collect(),
+            ));
         }
         if !untracked.is_empty() {
-            let mut args: Vec<String> = vec!["clean".into(), "-f".into(), "-q".into(), "--".into()];
-            args.extend(untracked.into_iter().map(|f| f.path));
-            commands.push(args);
+            let base = vec!["clean".into(), "-f".into(), "-q".into(), "--".into()];
+            commands.extend(with_paths(
+                &base,
+                untracked.into_iter().map(|f| f.path).collect(),
+            ));
         }
         self.git_seq("Discard changes", commands);
     }
@@ -1347,8 +1352,44 @@ fn reachable_from(
     reachable
 }
 
+/// Bytes of paths per command line. Windows allows 32767 characters in total; Unix
+/// systems far more, but a single huge command line can still hit `ARG_MAX`.
+const MAX_PATH_ARGS: usize = if cfg!(windows) { 24_000 } else { 200_000 };
+
+/// `base` followed by `paths`, split into as many commands as needed to keep each
+/// command line short enough for the operating system.
+fn with_paths(base: &[String], paths: Vec<String>) -> Vec<Vec<String>> {
+    let mut commands = Vec::new();
+    let mut current = base.to_vec();
+    let mut size = 0;
+    for path in paths {
+        if size > 0 && size + path.len() + 1 > MAX_PATH_ARGS {
+            commands.push(std::mem::replace(&mut current, base.to_vec()));
+            size = 0;
+        }
+        size += path.len() + 1;
+        current.push(path);
+    }
+    if size > 0 {
+        commands.push(current);
+    }
+    commands
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn splits_long_path_lists() {
+        let base = vec!["add".to_owned(), "--".to_owned()];
+        let path = "x".repeat(999);
+        let n = 3 * super::MAX_PATH_ARGS / 1000 + 1;
+        let commands = super::with_paths(&base, vec![path; n]);
+        assert_eq!(commands.len(), 4);
+        assert!(commands.iter().all(|c| c[..2] == base[..]));
+        assert_eq!(commands.iter().map(|c| c.len() - 2).sum::<usize>(), n);
+        assert!(super::with_paths(&base, Vec::new()).is_empty());
+    }
+
     use super::*;
     use crate::git::ChangeKind;
 

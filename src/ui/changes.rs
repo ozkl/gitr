@@ -194,9 +194,22 @@ fn file_list(ui: &mut egui::Ui, tab: &mut RepoTab, cx: &mut Ctx, staged: bool) {
     } else {
         tab.status.unstaged.len()
     };
-    let files: Vec<FileChange> = tab.visible_changes(staged);
+    let list = list_cache(tab, staged, cx.settings.changes_tree_view);
+    let files = &list.files;
     let filtered = files.len() != total;
-    let selected = tab.selected_files(staged);
+    // Selected files of this list that can be (un)staged; conflicts are resolved explicitly.
+    let in_this_list = tab
+        .selected_change
+        .as_ref()
+        .is_some_and(|(s, _)| *s == staged);
+    let target_count = if in_this_list {
+        tab.selected_changes
+            .iter()
+            .filter(|p| staged || !tab.status.conflicts.contains_key(*p))
+            .count()
+    } else {
+        0
+    };
     ui.add_space(4.0);
     ui.horizontal(|ui| {
         let title = if staged {
@@ -228,7 +241,7 @@ fn file_list(ui: &mut egui::Ui, tab: &mut RepoTab, cx: &mut Ctx, staged: bool) {
                     ui.close();
                 }
                 ui.separator();
-                let paths: Vec<String> = files.iter().map(|f| f.path.clone()).collect();
+                let paths = || files.iter().map(|f| f.path.clone()).collect::<Vec<_>>();
                 if staged {
                     let label = if filtered {
                         format!("{} Unstage {} Shown", icon::MINUS, files.len())
@@ -239,7 +252,7 @@ fn file_list(ui: &mut egui::Ui, tab: &mut RepoTab, cx: &mut Ctx, staged: bool) {
                         .add_enabled(!files.is_empty(), egui::Button::new(label))
                         .clicked()
                     {
-                        tab.unstage(paths);
+                        tab.unstage(paths());
                         ui.close();
                     }
                 } else {
@@ -252,7 +265,7 @@ fn file_list(ui: &mut egui::Ui, tab: &mut RepoTab, cx: &mut Ctx, staged: bool) {
                         .add_enabled(!files.is_empty(), egui::Button::new(label))
                         .clicked()
                     {
-                        tab.stage(paths);
+                        tab.stage(paths());
                         ui.close();
                     }
                     let label = if filtered {
@@ -271,19 +284,14 @@ fn file_list(ui: &mut egui::Ui, tab: &mut RepoTab, cx: &mut Ctx, staged: bool) {
                     }
                 }
             });
-            // Stage / unstage the selected files (conflicts are resolved explicitly, not by staging).
-            let targets: Vec<String> = selected
-                .iter()
-                .filter(|f| staged || f.kind != ChangeKind::Conflicted)
-                .map(|f| f.path.clone())
-                .collect();
+            // Stage / unstage the selected files.
             let verb = if staged { "Unstage" } else { "Stage" };
-            let label = if targets.len() > 1 {
-                format!("{verb} ({})", targets.len())
+            let label = if target_count > 1 {
+                format!("{verb} ({target_count})")
             } else {
                 verb.to_owned()
             };
-            let hint = match targets.len() {
+            let hint = match target_count {
                 0 => {
                     "Select files first (⌘/Ctrl-click or Shift-click to select several)".to_owned()
                 }
@@ -291,10 +299,16 @@ fn file_list(ui: &mut egui::Ui, tab: &mut RepoTab, cx: &mut Ctx, staged: bool) {
                 n => format!("{verb} {n} selected files"),
             };
             if ui
-                .add_enabled(!targets.is_empty(), egui::Button::new(label))
+                .add_enabled(target_count > 0, egui::Button::new(label))
                 .on_hover_text(hint)
                 .clicked()
             {
+                let targets: Vec<String> = tab
+                    .selected_files(staged)
+                    .into_iter()
+                    .filter(|f| staged || f.kind != ChangeKind::Conflicted)
+                    .map(|f| f.path)
+                    .collect();
                 if staged {
                     tab.unstage(targets);
                 } else {
@@ -319,31 +333,155 @@ fn file_list(ui: &mut egui::Ui, tab: &mut RepoTab, cx: &mut Ctx, staged: bool) {
         return;
     }
 
-    let tree_view = cx.settings.changes_tree_view;
+    // Only the visible rows are laid out, so lists with many thousands of files stay fast.
     let mut rows = Rows::default();
+    ui.spacing_mut().item_spacing.y = 0.0;
     egui::ScrollArea::vertical()
         .id_salt(("files", staged))
         .auto_shrink(false)
-        .show(ui, |ui| {
-            ui.spacing_mut().item_spacing.y = 0.0;
-            if tree_view {
-                let root = build_tree(&files);
-                show_dir(ui, tab, cx, &files, &root, staged, "", 0, &mut rows);
-            } else {
-                for file in &files {
-                    file_row(ui, tab, cx, file, staged, false, 0.0, &mut rows);
+        .show_rows(ui, ROW_H, list.rows.len(), |ui, range| {
+            for row in &list.rows[range] {
+                match row {
+                    ListRow::Dir {
+                        label,
+                        path,
+                        depth,
+                        open,
+                        files: under,
+                    } => dir_row(
+                        ui,
+                        tab,
+                        cx,
+                        &list,
+                        staged,
+                        (label, path, *depth, *open),
+                        under.clone(),
+                        &mut rows,
+                    ),
+                    ListRow::File {
+                        index,
+                        indent,
+                        name_only,
+                    } => file_row(
+                        ui,
+                        tab,
+                        cx,
+                        &files[*index],
+                        staged,
+                        *name_only,
+                        *indent,
+                        &mut rows,
+                    ),
                 }
             }
             rows.paint_selection(ui, p.selection);
         });
-    tab.change_order[usize::from(staged)] = rows.order;
+}
+
+const ROW_H: f32 = 24.0;
+
+/// A file list laid out as rows; cached on the tab while its inputs stay the same.
+pub struct ListCache {
+    key: ListKey,
+    /// The files that pass the filter.
+    files: Vec<FileChange>,
+    /// Indices into `files`, sorted by path: the files inside a folder form one run.
+    by_path: Vec<usize>,
+    rows: Vec<ListRow>,
+}
+
+#[derive(PartialEq)]
+struct ListKey {
+    status: u64,
+    filter: String,
+    tree: bool,
+    /// Hash of the collapsed folders of this list.
+    collapsed: u64,
+}
+
+enum ListRow {
+    Dir {
+        label: String,
+        /// Folder path with a trailing slash.
+        path: String,
+        depth: usize,
+        open: bool,
+        /// Range of `by_path` with the files inside the folder.
+        files: std::ops::Range<usize>,
+    },
+    File {
+        index: usize,
+        indent: f32,
+        name_only: bool,
+    },
+}
+
+impl ListCache {
+    fn paths_under(&self, range: std::ops::Range<usize>) -> Vec<String> {
+        self.by_path[range]
+            .iter()
+            .map(|&i| self.files[i].path.clone())
+            .collect()
+    }
+}
+
+fn list_cache(tab: &mut RepoTab, staged: bool, tree: bool) -> std::sync::Arc<ListCache> {
+    use std::hash::{Hash, Hasher};
+    let mut collapsed: Vec<&String> = tab
+        .collapsed_dirs
+        .iter()
+        .filter(|(s, _)| *s == staged)
+        .map(|(_, p)| p)
+        .collect();
+    collapsed.sort();
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    collapsed.hash(&mut hasher);
+    let key = ListKey {
+        status: tab.status_version,
+        filter: tab.changes_filter.clone(),
+        tree,
+        collapsed: hasher.finish(),
+    };
+    let i = usize::from(staged);
+    if let Some(cache) = &tab.change_lists[i]
+        && cache.key == key
+    {
+        return cache.clone();
+    }
+    let files = tab.visible_changes(staged);
+    let mut by_path: Vec<usize> = (0..files.len()).collect();
+    by_path.sort_by(|&a, &b| files[a].path.cmp(&files[b].path));
+    let mut rows = Vec::new();
+    if tree {
+        let root = build_tree(&files);
+        flatten(tab, &files, &by_path, &root, staged, "", 0, &mut rows);
+    } else {
+        rows.extend((0..files.len()).map(|index| ListRow::File {
+            index,
+            indent: 0.0,
+            name_only: false,
+        }));
+    }
+    tab.change_order[i] = rows
+        .iter()
+        .filter_map(|r| match r {
+            ListRow::File { index, .. } => Some(files[*index].path.clone()),
+            ListRow::Dir { .. } => None,
+        })
+        .collect();
+    let cache = std::sync::Arc::new(ListCache {
+        key,
+        files,
+        by_path,
+        rows,
+    });
+    tab.change_lists[i] = Some(cache.clone());
+    cache
 }
 
 /// Collects rows while a file list is drawn.
 #[derive(Default)]
 struct Rows {
-    /// File paths in display order.
-    order: Vec<String>,
     /// Reserved background shapes of selected rows, filled in afterwards so that
     /// adjacent selected rows join into one block.
     selected: Vec<(egui::layers::ShapeIdx, egui::Rect)>,
@@ -395,19 +533,18 @@ fn build_tree(files: &[FileChange]) -> Dir {
     root
 }
 
+/// Appends the rows of `node` (folders first, then files) in display order.
 #[allow(clippy::too_many_arguments)]
-fn show_dir(
-    ui: &mut egui::Ui,
-    tab: &mut RepoTab,
-    cx: &mut Ctx,
+fn flatten(
+    tab: &RepoTab,
     files: &[FileChange],
+    by_path: &[usize],
     node: &Dir,
     staged: bool,
     prefix: &str,
     depth: usize,
-    rows: &mut Rows,
+    rows: &mut Vec<ListRow>,
 ) {
-    let p = theme::pal(ui);
     for (name, child) in &node.dirs {
         // Collapse chains of single folders into one row ("Assets/_BallSlot/NodeGraph").
         let mut label = name.clone();
@@ -418,131 +555,162 @@ fn show_dir(
             child = c;
         }
         let path = format!("{prefix}{label}/");
-        let key = (staged, path.clone());
-        let open = !tab.collapsed_dirs.contains(&key);
-
-        let under: Vec<String> = files
-            .iter()
-            .filter(|f| f.path.starts_with(&path))
-            .map(|f| f.path.clone())
-            .collect();
-        let all_selected =
-            !under.is_empty() && under.iter().all(|f| tab.is_change_selected(staged, f));
-        let (rect, resp) =
-            ui.allocate_exact_size(Vec2::new(ui.available_width(), 24.0), Sense::click());
-        if all_selected {
-            rows.selected
-                .push((ui.painter().add(egui::Shape::Noop), rect));
-        } else if resp.hovered() || resp.context_menu_opened() {
-            ui.painter().rect_filled(rect, 3.0, p.hover);
-        }
-        let x = rect.left() + 4.0 + depth as f32 * INDENT;
-        let y = rect.center().y;
-        let caret = if open {
-            icon::CARET_DOWN
-        } else {
-            icon::CARET_RIGHT
-        };
-        let painter = ui.painter().with_clip_rect(rect);
-        let (icon_color, text_color) = if all_selected {
-            (p.selection_text, p.selection_text)
-        } else {
-            (p.muted, ui.visuals().text_color())
-        };
-        painter.text(
-            egui::pos2(x + 6.0, y),
-            egui::Align2::CENTER_CENTER,
-            caret,
-            egui::FontId::proportional(12.0),
-            icon_color,
-        );
-        painter.text(
-            egui::pos2(x + 22.0, y),
-            egui::Align2::CENTER_CENTER,
-            if open {
-                icon::FOLDER_OPEN
-            } else {
-                icon::FOLDER
-            },
-            egui::FontId::proportional(15.0),
-            icon_color,
-        );
-        painter.text(
-            egui::pos2(x + 34.0, y),
-            egui::Align2::LEFT_CENTER,
-            &label,
-            egui::FontId::proportional(13.5),
-            text_color,
-        );
-        // The caret toggles the folder; the rest of the row selects the files inside it.
-        let on_caret = resp
-            .interact_pointer_pos()
-            .is_some_and(|pos| pos.x < x + 14.0);
-        if (resp.clicked() && on_caret) || resp.double_clicked() {
-            if open {
-                tab.collapsed_dirs.insert(key);
-            } else {
-                tab.collapsed_dirs.remove(&key);
-            }
-        } else if resp.clicked() || (resp.secondary_clicked() && !all_selected) {
-            let add = resp.clicked() && ui.input(|i| i.modifiers.command || i.modifiers.shift);
-            tab.select_changes(staged, under.clone(), add);
-        }
-        resp.context_menu(|ui| {
-            let under: Vec<FileChange> = files
-                .iter()
-                .filter(|f| f.path.starts_with(&path))
-                .cloned()
-                .collect();
-            let paths: Vec<String> = under.iter().map(|f| f.path.clone()).collect();
-            if staged {
-                if ui
-                    .button(format!("{} Unstage Folder", icon::MINUS))
-                    .clicked()
-                {
-                    tab.unstage(paths);
-                    ui.close();
-                }
-            } else {
-                if ui.button(format!("{} Stage Folder", icon::PLUS)).clicked() {
-                    tab.stage(paths);
-                    ui.close();
-                }
-                if ui
-                    .button(format!("{} Discard Folder…", icon::TRASH))
-                    .clicked()
-                {
-                    *cx.dialog = Some(Dialog::Discard { files: under });
-                    ui.close();
-                }
-            }
-            ui.separator();
-            if ui
-                .button(format!("{} Show in file manager", icon::FOLDER_OPEN))
-                .clicked()
-            {
-                tab.open_in_file_manager(Some(path.trim_end_matches('/')));
-                ui.close();
-            }
-            copy_menu_item(
-                ui,
-                &format!("{} Copy path", icon::COPY),
-                path.trim_end_matches('/').to_owned(),
-            );
+        let open = !tab.collapsed_dirs.contains(&(staged, path.clone()));
+        let start = by_path.partition_point(|&i| files[i].path.as_str() < path.as_str());
+        let len = by_path[start..].partition_point(|&i| files[i].path.starts_with(&path));
+        rows.push(ListRow::Dir {
+            label,
+            path: path.clone(),
+            depth,
+            open,
+            files: start..start + len,
         });
         if open {
-            show_dir(ui, tab, cx, files, child, staged, &path, depth + 1, rows);
+            flatten(tab, files, by_path, child, staged, &path, depth + 1, rows);
         }
     }
-    for &i in &node.files {
+    for &index in &node.files {
         let indent = depth as f32 * INDENT
             + if depth > 0 || !node.dirs.is_empty() {
                 18.0
             } else {
                 0.0
             };
-        file_row(ui, tab, cx, &files[i], staged, true, indent, rows);
+        rows.push(ListRow::File {
+            index,
+            indent,
+            name_only: true,
+        });
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn dir_row(
+    ui: &mut egui::Ui,
+    tab: &mut RepoTab,
+    cx: &mut Ctx,
+    list: &ListCache,
+    staged: bool,
+    (label, path, depth, open): (&str, &str, usize, bool),
+    under: std::ops::Range<usize>,
+    rows: &mut Rows,
+) {
+    let p = theme::pal(ui);
+    let key = (staged, path.to_owned());
+    // The selection is sorted, so the selected paths inside this folder are one run too.
+    let n = under.len();
+    let all_selected = n > 0
+        && tab
+            .selected_change
+            .as_ref()
+            .is_some_and(|(s, _)| *s == staged)
+        && tab
+            .selected_changes
+            .range::<str, _>((std::ops::Bound::Included(path), std::ops::Bound::Unbounded))
+            .take_while(|s| s.starts_with(path))
+            .take(n)
+            .count()
+            == n;
+    let (rect, resp) =
+        ui.allocate_exact_size(Vec2::new(ui.available_width(), ROW_H), Sense::click());
+    if all_selected {
+        rows.selected
+            .push((ui.painter().add(egui::Shape::Noop), rect));
+    } else if resp.hovered() || resp.context_menu_opened() {
+        ui.painter().rect_filled(rect, 3.0, p.hover);
+    }
+    let x = rect.left() + 4.0 + depth as f32 * INDENT;
+    let y = rect.center().y;
+    let caret = if open {
+        icon::CARET_DOWN
+    } else {
+        icon::CARET_RIGHT
+    };
+    let painter = ui.painter().with_clip_rect(rect);
+    let (icon_color, text_color) = if all_selected {
+        (p.selection_text, p.selection_text)
+    } else {
+        (p.muted, ui.visuals().text_color())
+    };
+    painter.text(
+        egui::pos2(x + 6.0, y),
+        egui::Align2::CENTER_CENTER,
+        caret,
+        egui::FontId::proportional(12.0),
+        icon_color,
+    );
+    painter.text(
+        egui::pos2(x + 22.0, y),
+        egui::Align2::CENTER_CENTER,
+        if open {
+            icon::FOLDER_OPEN
+        } else {
+            icon::FOLDER
+        },
+        egui::FontId::proportional(15.0),
+        icon_color,
+    );
+    painter.text(
+        egui::pos2(x + 34.0, y),
+        egui::Align2::LEFT_CENTER,
+        label,
+        egui::FontId::proportional(13.5),
+        text_color,
+    );
+    // The caret toggles the folder; the rest of the row selects the files inside it.
+    let on_caret = resp
+        .interact_pointer_pos()
+        .is_some_and(|pos| pos.x < x + 14.0);
+    if (resp.clicked() && on_caret) || resp.double_clicked() {
+        if open {
+            tab.collapsed_dirs.insert(key);
+        } else {
+            tab.collapsed_dirs.remove(&key);
+        }
+    } else if resp.clicked() || (resp.secondary_clicked() && !all_selected) {
+        let add = resp.clicked() && ui.input(|i| i.modifiers.command || i.modifiers.shift);
+        tab.select_changes(staged, list.paths_under(under.clone()), add);
+    }
+    resp.context_menu(|ui| {
+        if staged {
+            if ui
+                .button(format!("{} Unstage Folder", icon::MINUS))
+                .clicked()
+            {
+                tab.unstage(list.paths_under(under.clone()));
+                ui.close();
+            }
+        } else {
+            if ui.button(format!("{} Stage Folder", icon::PLUS)).clicked() {
+                tab.stage(list.paths_under(under.clone()));
+                ui.close();
+            }
+            if ui
+                .button(format!("{} Discard Folder…", icon::TRASH))
+                .clicked()
+            {
+                let files = list.by_path[under.clone()]
+                    .iter()
+                    .map(|&i| list.files[i].clone())
+                    .collect();
+                *cx.dialog = Some(Dialog::Discard { files });
+                ui.close();
+            }
+        }
+        ui.separator();
+        if ui
+            .button(format!("{} Show in file manager", icon::FOLDER_OPEN))
+            .clicked()
+        {
+            tab.open_in_file_manager(Some(path.trim_end_matches('/')));
+            ui.close();
+        }
+        copy_menu_item(
+            ui,
+            &format!("{} Copy path", icon::COPY),
+            path.trim_end_matches('/').to_owned(),
+        );
+    });
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -556,11 +724,10 @@ fn file_row(
     indent: f32,
     rows: &mut Rows,
 ) {
-    rows.order.push(file.path.clone());
     let p = theme::pal(ui);
     let selected = tab.is_change_selected(staged, &file.path);
     let (rect, resp) =
-        ui.allocate_exact_size(Vec2::new(ui.available_width(), 24.0), Sense::click());
+        ui.allocate_exact_size(Vec2::new(ui.available_width(), ROW_H), Sense::click());
     if selected {
         rows.selected
             .push((ui.painter().add(egui::Shape::Noop), rect));
@@ -629,9 +796,11 @@ fn file_row(
         // Right-clicking outside the selection selects that file, like in Finder / Explorer.
         tab.select_change(staged, file.path.clone());
     }
-    let group = tab.selected_files(staged);
-    if selected && group.len() > 1 {
-        resp.context_menu(|ui| multi_menu(ui, tab, cx, &group, staged));
+    if selected && tab.selected_changes.len() > 1 {
+        resp.context_menu(|ui| {
+            let group = tab.selected_files(staged);
+            multi_menu(ui, tab, cx, &group, staged)
+        });
     } else {
         resp.context_menu(|ui| file_menu(ui, tab, cx, file, staged));
     }
